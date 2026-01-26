@@ -184,12 +184,13 @@ class VideoListItemWidget(QFrame):
             tags_layout.setSpacing(4)
             for tag in tags[:3]:
                 tag_label = QLabel(tag.name)
-                tag_label.setStyleSheet(f"""
-                    background-color: {tag.color};
-                    color: white;
-                    padding: 2px 6px;
+                tag_label.setStyleSheet("""
+                    background-color: #4a4a4a;
+                    color: #e0e0e0;
+                    padding: 2px 8px;
                     border-radius: 8px;
                     font-size: 10px;
+                    border: 1px solid #5a5a5a;
                 """)
                 tags_layout.addWidget(tag_label)
             if len(tags) > 3:

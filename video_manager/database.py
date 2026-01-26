@@ -41,7 +41,6 @@ class Tag:
     """Tag data model."""
     id: Optional[int]
     name: str
-    color: str
 
 
 class Database:
@@ -216,24 +215,24 @@ class Database:
         self.conn.commit()
 
     # Tag operations
-    def add_tag(self, name: str, color: str = "#3498db") -> Tag:
+    def add_tag(self, name: str) -> Tag:
         """Add a new tag."""
         cursor = self.conn.cursor()
         cursor.execute(
-            "INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)",
-            (name, color)
+            "INSERT OR IGNORE INTO tags (name) VALUES (?)",
+            (name,)
         )
         self.conn.commit()
 
         cursor.execute("SELECT * FROM tags WHERE name = ?", (name,))
         row = cursor.fetchone()
-        return Tag(id=row["id"], name=row["name"], color=row["color"])
+        return Tag(id=row["id"], name=row["name"])
 
     def get_tags(self) -> list[Tag]:
         """Get all tags."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM tags ORDER BY name")
-        return [Tag(id=row["id"], name=row["name"], color=row["color"])
+        cursor.execute("SELECT id, name FROM tags ORDER BY name")
+        return [Tag(id=row["id"], name=row["name"])
                 for row in cursor.fetchall()]
 
     def remove_tag(self, tag_id: int):
@@ -242,13 +241,10 @@ class Database:
         cursor.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
         self.conn.commit()
 
-    def update_tag(self, tag_id: int, name: Optional[str] = None, color: Optional[str] = None):
-        """Update tag properties."""
+    def update_tag(self, tag_id: int, name: str):
+        """Update tag name."""
         cursor = self.conn.cursor()
-        if name is not None:
-            cursor.execute("UPDATE tags SET name = ? WHERE id = ?", (name, tag_id))
-        if color is not None:
-            cursor.execute("UPDATE tags SET color = ? WHERE id = ?", (color, tag_id))
+        cursor.execute("UPDATE tags SET name = ? WHERE id = ?", (name, tag_id))
         self.conn.commit()
 
     # Video-Tag associations
@@ -274,12 +270,12 @@ class Database:
         """Get all tags for a video."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT t.* FROM tags t
+            SELECT t.id, t.name FROM tags t
             JOIN video_tags vt ON t.id = vt.tag_id
             WHERE vt.video_id = ?
             ORDER BY t.name
         """, (video_id,))
-        return [Tag(id=row["id"], name=row["name"], color=row["color"])
+        return [Tag(id=row["id"], name=row["name"])
                 for row in cursor.fetchall()]
 
     def close(self):
