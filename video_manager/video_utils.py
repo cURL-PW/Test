@@ -109,15 +109,36 @@ def is_video_file(path: str) -> bool:
     return Path(path).suffix.lower() in VIDEO_EXTENSIONS
 
 
-def scan_folder_for_videos(folder_path: str) -> list[str]:
-    """Scan a folder for video files (non-recursive)."""
+def scan_folder_for_videos(folder_path: str, recursive: bool = False) -> list[str]:
+    """
+    Scan a folder for video files.
+
+    Args:
+        folder_path: Path to the folder to scan
+        recursive: If True, scan subfolders recursively
+
+    Returns:
+        List of video file paths
+    """
     videos = []
-    try:
-        for entry in os.scandir(folder_path):
-            if entry.is_file() and is_video_file(entry.path):
-                videos.append(entry.path)
-    except PermissionError:
-        pass
+
+    if recursive:
+        try:
+            for root, dirs, files in os.walk(folder_path):
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    if is_video_file(filepath):
+                        videos.append(filepath)
+        except PermissionError:
+            pass
+    else:
+        try:
+            for entry in os.scandir(folder_path):
+                if entry.is_file() and is_video_file(entry.path):
+                    videos.append(entry.path)
+        except PermissionError:
+            pass
+
     return sorted(videos)
 
 

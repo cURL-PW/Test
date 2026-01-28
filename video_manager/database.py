@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass
@@ -16,6 +17,8 @@ class Video:
     duration: float
     thumbnail_path: Optional[str]
     folder_id: int
+    favorite: bool = False
+    created_at: Optional[str] = None
 
     @property
     def duration_str(self) -> str:
@@ -56,6 +59,7 @@ class Database:
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
+        self._migrate_tables()
 
     def _create_tables(self):
         """Create database tables if they don't exist."""
@@ -77,6 +81,8 @@ class Database:
                 duration REAL DEFAULT 0,
                 thumbnail_path TEXT,
                 folder_id INTEGER,
+                favorite INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE
             )
         """)
@@ -100,10 +106,40 @@ class Database:
         """)
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_folder ON videos (folder_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_filename ON videos (filename)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_favorite ON videos (favorite)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_tags_video ON video_tags (video_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_tags_tag ON video_tags (tag_id)")
 
         self.conn.commit()
+
+    def _migrate_tables(self):
+        """Add new columns to existing tables if needed."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("PRAGMA table_info(videos)")
+        columns = [col[1] for col in cursor.fetchall()]
+
+        if "favorite" not in columns:
+            cursor.execute("ALTER TABLE videos ADD COLUMN favorite INTEGER DEFAULT 0")
+
+        if "created_at" not in columns:
+            cursor.execute("ALTER TABLE videos ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP")
+
+        self.conn.commit()
+
+    def _row_to_video(self, row) -> Video:
+        """Convert database row to Video object."""
+        return Video(
+            id=row["id"],
+            path=row["path"],
+            filename=row["filename"],
+            duration=row["duration"],
+            thumbnail_path=row["thumbnail_path"],
+            folder_id=row["folder_id"],
+            favorite=bool(row["favorite"]) if "favorite" in row.keys() else False,
+            created_at=row["created_at"] if "created_at" in row.keys() else None
+        )
 
     # Folder operations
     def add_folder(self, path: str) -> Folder:
@@ -139,9 +175,9 @@ class Database:
         """Add a new video."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO videos (path, filename, duration, thumbnail_path, folder_id)
-            VALUES (?, ?, ?, ?, ?)
-        """, (path, filename, duration, thumbnail_path, folder_id))
+            INSERT OR REPLACE INTO videos (path, filename, duration, thumbnail_path, folder_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (path, filename, duration, thumbnail_path, folder_id, datetime.now().isoformat()))
         self.conn.commit()
 
         video_id = cursor.lastrowid
@@ -156,48 +192,101 @@ class Database:
         cursor.execute("SELECT * FROM videos WHERE id = ?", (video_id,))
         row = cursor.fetchone()
         if row:
-            return Video(
-                id=row["id"], path=row["path"], filename=row["filename"],
-                duration=row["duration"], thumbnail_path=row["thumbnail_path"],
-                folder_id=row["folder_id"]
-            )
+            return self._row_to_video(row)
         return None
 
-    def get_videos(self, folder_id: Optional[int] = None) -> list[Video]:
-        """Get all videos, optionally filtered by folder."""
+    def get_videos(self, folder_id: Optional[int] = None,
+                   sort_by: str = "filename", sort_order: str = "asc",
+                   search_query: str = "", favorites_only: bool = False) -> list[Video]:
+        """Get videos with filtering and sorting options."""
         cursor = self.conn.cursor()
+
+        valid_sort_columns = {"filename", "duration", "created_at", "favorite"}
+        if sort_by not in valid_sort_columns:
+            sort_by = "filename"
+        sort_order = "DESC" if sort_order.lower() == "desc" else "ASC"
+
+        conditions = []
+        params = []
+
         if folder_id is not None:
-            cursor.execute("SELECT * FROM videos WHERE folder_id = ? ORDER BY filename", (folder_id,))
+            conditions.append("folder_id = ?")
+            params.append(folder_id)
+
+        if search_query:
+            conditions.append("filename LIKE ?")
+            params.append(f"%{search_query}%")
+
+        if favorites_only:
+            conditions.append("favorite = 1")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        if sort_by == "favorite":
+            order_clause = f"ORDER BY favorite DESC, filename ASC"
         else:
-            cursor.execute("SELECT * FROM videos ORDER BY filename")
+            order_clause = f"ORDER BY {sort_by} {sort_order}"
 
-        return [Video(
-            id=row["id"], path=row["path"], filename=row["filename"],
-            duration=row["duration"], thumbnail_path=row["thumbnail_path"],
-            folder_id=row["folder_id"]
-        ) for row in cursor.fetchall()]
+        query = f"SELECT * FROM videos {where_clause} {order_clause}"
+        cursor.execute(query, params)
 
-    def get_videos_by_tags(self, tag_ids: list[int]) -> list[Video]:
+        return [self._row_to_video(row) for row in cursor.fetchall()]
+
+    def get_videos_by_tags(self, tag_ids: list[int], sort_by: str = "filename",
+                           sort_order: str = "asc", search_query: str = "") -> list[Video]:
         """Get videos that have all specified tags."""
         if not tag_ids:
-            return self.get_videos()
+            return self.get_videos(sort_by=sort_by, sort_order=sort_order, search_query=search_query)
 
         cursor = self.conn.cursor()
         placeholders = ",".join("?" * len(tag_ids))
-        cursor.execute(f"""
+
+        valid_sort_columns = {"filename", "duration", "created_at", "favorite"}
+        if sort_by not in valid_sort_columns:
+            sort_by = "filename"
+        sort_order = "DESC" if sort_order.lower() == "desc" else "ASC"
+
+        search_condition = ""
+        params = list(tag_ids)
+        if search_query:
+            search_condition = "AND v.filename LIKE ?"
+            params.append(f"%{search_query}%")
+
+        params.append(len(tag_ids))
+
+        query = f"""
             SELECT v.* FROM videos v
             JOIN video_tags vt ON v.id = vt.video_id
-            WHERE vt.tag_id IN ({placeholders})
+            WHERE vt.tag_id IN ({placeholders}) {search_condition}
             GROUP BY v.id
             HAVING COUNT(DISTINCT vt.tag_id) = ?
-            ORDER BY v.filename
-        """, (*tag_ids, len(tag_ids)))
+            ORDER BY v.{sort_by} {sort_order}
+        """
+        cursor.execute(query, params)
 
-        return [Video(
-            id=row["id"], path=row["path"], filename=row["filename"],
-            duration=row["duration"], thumbnail_path=row["thumbnail_path"],
-            folder_id=row["folder_id"]
-        ) for row in cursor.fetchall()]
+        return [self._row_to_video(row) for row in cursor.fetchall()]
+
+    def get_favorite_videos(self, sort_by: str = "filename", sort_order: str = "asc") -> list[Video]:
+        """Get all favorite videos."""
+        return self.get_videos(favorites_only=True, sort_by=sort_by, sort_order=sort_order)
+
+    def toggle_favorite(self, video_id: int) -> bool:
+        """Toggle favorite status and return new status."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT favorite FROM videos WHERE id = ?", (video_id,))
+        row = cursor.fetchone()
+        if row:
+            new_status = 0 if row["favorite"] else 1
+            cursor.execute("UPDATE videos SET favorite = ? WHERE id = ?", (new_status, video_id))
+            self.conn.commit()
+            return bool(new_status)
+        return False
+
+    def set_favorite(self, video_id: int, favorite: bool):
+        """Set favorite status."""
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE videos SET favorite = ? WHERE id = ?", (1 if favorite else 0, video_id))
+        self.conn.commit()
 
     def remove_video(self, video_id: int):
         """Remove a video."""

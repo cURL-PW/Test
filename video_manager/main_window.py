@@ -9,10 +9,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QFileDialog, QMenu, QToolBar, QStatusBar,
     QListWidget, QListWidgetItem, QStackedWidget, QFrame,
-    QMessageBox, QProgressDialog, QApplication
+    QMessageBox, QProgressDialog, QApplication, QLineEdit,
+    QComboBox, QCheckBox, QDialog, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 
 from .database import Database, Video
 from .video_utils import (
@@ -23,6 +24,51 @@ from .widgets.video_item import VideoGridWidget, VideoListWidget
 from .widgets.tag_widget import TagWidget, TagFilterWidget, TagManagerDialog
 
 
+class FolderAddDialog(QDialog):
+    """Dialog for adding a folder with options."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Folder")
+        self.setMinimumWidth(400)
+
+        layout = QVBoxLayout(self)
+
+        path_layout = QHBoxLayout()
+        self.path_input = QLineEdit()
+        self.path_input.setPlaceholderText("Select folder...")
+        self.path_input.setReadOnly(True)
+        path_layout.addWidget(self.path_input)
+
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_folder)
+        path_layout.addWidget(browse_btn)
+
+        layout.addLayout(path_layout)
+
+        self.recursive_check = QCheckBox("Include subfolders (recursive scan)")
+        layout.addWidget(self.recursive_check)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.folder_path = ""
+
+    def _browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Video Folder")
+        if folder:
+            self.folder_path = folder
+            self.path_input.setText(folder)
+
+    def get_options(self) -> tuple[str, bool]:
+        """Return (folder_path, recursive)."""
+        return self.folder_path, self.recursive_check.isChecked()
+
+
 class VideoScanWorker(QThread):
     """Worker thread for scanning videos."""
 
@@ -30,13 +76,14 @@ class VideoScanWorker(QThread):
     video_found = pyqtSignal(dict)
     finished = pyqtSignal()
 
-    def __init__(self, folder_path: str, folder_id: int):
+    def __init__(self, folder_path: str, folder_id: int, recursive: bool = False):
         super().__init__()
         self.folder_path = folder_path
         self.folder_id = folder_id
+        self.recursive = recursive
 
     def run(self):
-        videos = scan_folder_for_videos(self.folder_path)
+        videos = scan_folder_for_videos(self.folder_path, recursive=self.recursive)
         total = len(videos)
 
         for i, video_path in enumerate(videos):
@@ -66,12 +113,19 @@ class MainWindow(QMainWindow):
         self.selected_video_id = None
         self.scan_worker = None
 
+        self.current_sort_by = "filename"
+        self.current_sort_order = "asc"
+        self.current_search_query = ""
+        self.current_tag_filter: list[int] = []
+        self.show_favorites_only = False
+
         self.setWindowTitle("Video Manager")
         self.setMinimumSize(1200, 700)
 
         self._setup_ui()
         self._setup_toolbar()
         self._setup_statusbar()
+        self._setup_shortcuts()
         self._load_folders()
         self._apply_dark_theme()
 
@@ -100,6 +154,10 @@ class MainWindow(QMainWindow):
             }
             QPushButton:pressed {
                 background-color: #2d2d2d;
+            }
+            QPushButton:checked {
+                background-color: #3498db;
+                border: 1px solid #2980b9;
             }
             QListWidget {
                 background-color: #252525;
@@ -143,6 +201,24 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 color: #e0e0e0;
             }
+            QLineEdit:focus {
+                border: 1px solid #3498db;
+            }
+            QComboBox {
+                background-color: #3d3d3d;
+                border: 1px solid #4d4d4d;
+                padding: 5px 10px;
+                border-radius: 4px;
+                color: #e0e0e0;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3d3d3d;
+                border: 1px solid #4d4d4d;
+                selection-background-color: #3498db;
+            }
             QLabel {
                 color: #e0e0e0;
             }
@@ -155,6 +231,13 @@ class MainWindow(QMainWindow):
             }
             QMenu::item:selected {
                 background-color: #3498db;
+            }
+            QCheckBox {
+                color: #e0e0e0;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
             }
         """)
 
@@ -205,6 +288,43 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
 
+        search_bar = QWidget()
+        search_bar.setStyleSheet("background-color: #252525; padding: 4px;")
+        search_layout = QHBoxLayout(search_bar)
+        search_layout.setContentsMargins(8, 8, 8, 8)
+        search_layout.setSpacing(12)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search videos... (Ctrl+F)")
+        self.search_input.setMaximumWidth(300)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        search_layout.addWidget(self.search_input)
+
+        search_layout.addWidget(QLabel("Sort:"))
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Name", "Duration", "Date Added", "Favorites"])
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        search_layout.addWidget(self.sort_combo)
+
+        self.sort_order_btn = QPushButton("Asc")
+        self.sort_order_btn.setFixedWidth(50)
+        self.sort_order_btn.setCheckable(True)
+        self.sort_order_btn.clicked.connect(self._toggle_sort_order)
+        search_layout.addWidget(self.sort_order_btn)
+
+        search_layout.addSpacing(20)
+
+        self.favorites_btn = QPushButton("Favorites")
+        self.favorites_btn.setCheckable(True)
+        self.favorites_btn.setToolTip("Show only favorites")
+        self.favorites_btn.clicked.connect(self._toggle_favorites_filter)
+        search_layout.addWidget(self.favorites_btn)
+
+        search_layout.addStretch()
+
+        right_layout.addWidget(search_bar)
+
         self.view_stack = QStackedWidget()
 
         self.grid_view = VideoGridWidget()
@@ -236,9 +356,21 @@ class MainWindow(QMainWindow):
         detail_layout = QVBoxLayout(self.detail_panel)
         detail_layout.setContentsMargins(12, 8, 12, 8)
 
+        title_row = QHBoxLayout()
+
+        self.favorite_btn = QPushButton()
+        self.favorite_btn.setFixedSize(28, 28)
+        self.favorite_btn.clicked.connect(self._toggle_current_favorite)
+        self.favorite_btn.setToolTip("Toggle favorite")
+        self._update_favorite_button(False)
+        title_row.addWidget(self.favorite_btn)
+
         self.video_title = QLabel("Select a video")
         self.video_title.setStyleSheet("font-size: 14px; font-weight: bold;")
-        detail_layout.addWidget(self.video_title)
+        title_row.addWidget(self.video_title)
+        title_row.addStretch()
+
+        detail_layout.addLayout(title_row)
 
         self.video_info = QLabel("")
         self.video_info.setStyleSheet("color: #888; font-size: 12px;")
@@ -292,6 +424,101 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.statusbar)
         self.statusbar.showMessage("Ready")
 
+    def _setup_shortcuts(self):
+        """Setup keyboard shortcuts."""
+        QShortcut(QKeySequence("Ctrl+F"), self, self._focus_search)
+
+        QShortcut(QKeySequence("Return"), self, self._play_selected_video)
+        QShortcut(QKeySequence("Enter"), self, self._play_selected_video)
+
+        QShortcut(QKeySequence("Delete"), self, self._delete_selected_video)
+
+        QShortcut(QKeySequence("F"), self, self._toggle_current_favorite)
+
+        QShortcut(QKeySequence("Escape"), self, self._clear_search)
+
+    def _focus_search(self):
+        """Focus the search input."""
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _clear_search(self):
+        """Clear search and reset focus."""
+        self.search_input.clear()
+        self.search_input.clearFocus()
+
+    def _play_selected_video(self):
+        """Play currently selected video."""
+        if self.selected_video_id:
+            self._play_video(self.selected_video_id)
+
+    def _delete_selected_video(self):
+        """Delete currently selected video."""
+        if self.selected_video_id:
+            self._remove_video(self.selected_video_id)
+
+    def _update_favorite_button(self, is_favorite: bool):
+        """Update favorite button appearance."""
+        if is_favorite:
+            self.favorite_btn.setText("★")
+            self.favorite_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f39c12;
+                    border: none;
+                    font-size: 16px;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #e67e22;
+                }
+            """)
+        else:
+            self.favorite_btn.setText("☆")
+            self.favorite_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3d3d3d;
+                    border: 1px solid #4d4d4d;
+                    font-size: 16px;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #4d4d4d;
+                }
+            """)
+
+    def _toggle_current_favorite(self):
+        """Toggle favorite status of current video."""
+        if self.selected_video_id:
+            new_status = self.db.toggle_favorite(self.selected_video_id)
+            self._update_favorite_button(new_status)
+            self._refresh_videos()
+
+    def _toggle_favorites_filter(self):
+        """Toggle showing only favorites."""
+        self.show_favorites_only = self.favorites_btn.isChecked()
+        self._refresh_videos()
+
+    def _on_search_changed(self, text: str):
+        """Handle search input change."""
+        self.current_search_query = text
+        self._refresh_videos()
+
+    def _on_sort_changed(self, index: int):
+        """Handle sort selection change."""
+        sort_options = ["filename", "duration", "created_at", "favorite"]
+        self.current_sort_by = sort_options[index]
+        self._refresh_videos()
+
+    def _toggle_sort_order(self):
+        """Toggle sort order between asc and desc."""
+        if self.sort_order_btn.isChecked():
+            self.current_sort_order = "desc"
+            self.sort_order_btn.setText("Desc")
+        else:
+            self.current_sort_order = "asc"
+            self.sort_order_btn.setText("Asc")
+        self._refresh_videos()
+
     def _set_view_mode(self, mode: str):
         """Switch between grid and list view."""
         if mode == "grid":
@@ -312,6 +539,10 @@ class MainWindow(QMainWindow):
         all_item.setData(Qt.ItemDataRole.UserRole, None)
         self.folder_list.addItem(all_item)
 
+        fav_item = QListWidgetItem("★ Favorites")
+        fav_item.setData(Qt.ItemDataRole.UserRole, "favorites")
+        self.folder_list.addItem(fav_item)
+
         for folder in folders:
             item = QListWidgetItem(folder.name)
             item.setData(Qt.ItemDataRole.UserRole, folder.id)
@@ -322,15 +553,15 @@ class MainWindow(QMainWindow):
 
     def _add_folder(self):
         """Add a new folder to watch."""
-        folder_path = QFileDialog.getExistingDirectory(
-            self, "Select Video Folder"
-        )
-        if folder_path:
-            folder = self.db.add_folder(folder_path)
-            self._load_folders()
-            self._scan_folder(folder.id, folder_path)
+        dialog = FolderAddDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            folder_path, recursive = dialog.get_options()
+            if folder_path:
+                folder = self.db.add_folder(folder_path)
+                self._load_folders()
+                self._scan_folder(folder.id, folder_path, recursive)
 
-    def _scan_folder(self, folder_id: int, folder_path: str):
+    def _scan_folder(self, folder_id: int, folder_path: str, recursive: bool = False):
         """Scan a folder for videos."""
         if self.scan_worker and self.scan_worker.isRunning():
             return
@@ -341,7 +572,7 @@ class MainWindow(QMainWindow):
         self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress_dialog.show()
 
-        self.scan_worker = VideoScanWorker(folder_path, folder_id)
+        self.scan_worker = VideoScanWorker(folder_path, folder_id, recursive)
         self.scan_worker.progress.connect(self._on_scan_progress)
         self.scan_worker.video_found.connect(self._on_video_found)
         self.scan_worker.finished.connect(self._on_scan_finished)
@@ -371,12 +602,35 @@ class MainWindow(QMainWindow):
 
     def _on_folder_selected(self, item: QListWidgetItem):
         """Handle folder selection."""
-        self.current_folder_id = item.data(Qt.ItemDataRole.UserRole)
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data == "favorites":
+            self.current_folder_id = None
+            self.show_favorites_only = True
+            self.favorites_btn.setChecked(True)
+        else:
+            self.current_folder_id = data
+            self.show_favorites_only = False
+            self.favorites_btn.setChecked(False)
         self._refresh_videos()
 
     def _refresh_videos(self):
-        """Refresh video list."""
-        videos = self.db.get_videos(self.current_folder_id)
+        """Refresh video list with current filters."""
+        if self.current_tag_filter:
+            videos = self.db.get_videos_by_tags(
+                self.current_tag_filter,
+                sort_by=self.current_sort_by,
+                sort_order=self.current_sort_order,
+                search_query=self.current_search_query
+            )
+        else:
+            videos = self.db.get_videos(
+                folder_id=self.current_folder_id,
+                sort_by=self.current_sort_by,
+                sort_order=self.current_sort_order,
+                search_query=self.current_search_query,
+                favorites_only=self.show_favorites_only
+            )
+
         self.grid_view.set_videos(videos)
         self.list_view.set_videos(videos)
         self.statusbar.showMessage(f"{len(videos)} videos")
@@ -401,6 +655,7 @@ class MainWindow(QMainWindow):
                 f"Duration: {video.duration_str} | Path: {video.path}"
             )
             self.tag_widget.set_video(video_id)
+            self._update_favorite_button(video.favorite)
 
     def _play_video(self, video_id: int):
         """Play the selected video."""
@@ -416,9 +671,18 @@ class MainWindow(QMainWindow):
     def _video_context_menu(self, video_id: int, pos):
         """Show context menu for video."""
         menu = QMenu(self)
+        video = self.db.get_video(video_id)
 
         play_action = menu.addAction("Play")
         play_action.triggered.connect(lambda: self._play_video(video_id))
+
+        menu.addSeparator()
+
+        if video and video.favorite:
+            fav_action = menu.addAction("Remove from Favorites")
+        else:
+            fav_action = menu.addAction("Add to Favorites")
+        fav_action.triggered.connect(lambda: self._toggle_video_favorite(video_id))
 
         menu.addSeparator()
 
@@ -433,6 +697,13 @@ class MainWindow(QMainWindow):
         delete_action.triggered.connect(lambda: self._remove_video(video_id))
 
         menu.exec(pos)
+
+    def _toggle_video_favorite(self, video_id: int):
+        """Toggle favorite status of a video."""
+        new_status = self.db.toggle_favorite(video_id)
+        if video_id == self.selected_video_id:
+            self._update_favorite_button(new_status)
+        self._refresh_videos()
 
     def _open_containing_folder(self, video_id: int):
         """Open the folder containing the video."""
@@ -455,6 +726,10 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.db.remove_video(video_id)
+            if video_id == self.selected_video_id:
+                self.selected_video_id = None
+                self.video_title.setText("Select a video")
+                self.video_info.setText("")
             self._refresh_videos()
 
     def _folder_context_menu(self, pos):
@@ -464,7 +739,7 @@ class MainWindow(QMainWindow):
             return
 
         folder_id = item.data(Qt.ItemDataRole.UserRole)
-        if folder_id is None:
+        if folder_id is None or folder_id == "favorites":
             return
 
         menu = QMenu(self)
@@ -472,6 +747,11 @@ class MainWindow(QMainWindow):
         rescan_action = menu.addAction("Rescan Folder")
         rescan_action.triggered.connect(
             lambda: self._rescan_folder(folder_id)
+        )
+
+        rescan_recursive_action = menu.addAction("Rescan with Subfolders")
+        rescan_recursive_action.triggered.connect(
+            lambda: self._rescan_folder(folder_id, recursive=True)
         )
 
         menu.addSeparator()
@@ -483,12 +763,12 @@ class MainWindow(QMainWindow):
 
         menu.exec(self.folder_list.mapToGlobal(pos))
 
-    def _rescan_folder(self, folder_id: int):
+    def _rescan_folder(self, folder_id: int, recursive: bool = False):
         """Rescan a folder."""
         folders = self.db.get_folders()
         for folder in folders:
             if folder.id == folder_id:
-                self._scan_folder(folder.id, folder.path)
+                self._scan_folder(folder.id, folder.path, recursive)
                 return
 
     def _remove_folder(self, folder_id: int):
@@ -511,14 +791,8 @@ class MainWindow(QMainWindow):
 
     def _on_tag_filter_changed(self, tag_ids: list[int]):
         """Handle tag filter change."""
-        if tag_ids:
-            videos = self.db.get_videos_by_tags(tag_ids)
-        else:
-            videos = self.db.get_videos(self.current_folder_id)
-
-        self.grid_view.set_videos(videos)
-        self.list_view.set_videos(videos)
-        self.statusbar.showMessage(f"{len(videos)} videos")
+        self.current_tag_filter = tag_ids
+        self._refresh_videos()
 
     def _open_tag_manager(self):
         """Open tag manager dialog."""
