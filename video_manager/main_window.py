@@ -10,18 +10,21 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QMenu, QToolBar, QStatusBar,
     QListWidget, QListWidgetItem, QStackedWidget, QFrame,
     QMessageBox, QProgressDialog, QApplication, QLineEdit,
-    QComboBox, QCheckBox, QDialog, QDialogButtonBox
+    QComboBox, QCheckBox, QDialog, QDialogButtonBox, QProgressBar
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QMimeData
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
 
 from .database import Database, Video
 from .video_utils import (
     scan_folder_for_videos, generate_thumbnail,
-    get_video_duration, format_duration
+    get_video_duration, get_video_info, format_duration, format_file_size,
+    is_video_file
 )
 from .widgets.video_item import VideoGridWidget, VideoListWidget
 from .widgets.tag_widget import TagWidget, TagFilterWidget, TagManagerDialog
+from .widgets.video_player import VideoPlayerWidget
+from .widgets.statistics_dialog import StatisticsDialog
 
 
 class FolderAddDialog(QDialog):
@@ -89,15 +92,20 @@ class VideoScanWorker(QThread):
         for i, video_path in enumerate(videos):
             self.progress.emit(i + 1, total)
 
-            duration = get_video_duration(video_path)
+            # Get full video info including metadata
+            info = get_video_info(video_path)
             thumbnail = generate_thumbnail(video_path)
 
             self.video_found.emit({
                 "path": video_path,
                 "filename": os.path.basename(video_path),
-                "duration": duration,
+                "duration": info["duration"],
                 "thumbnail": thumbnail,
-                "folder_id": self.folder_id
+                "folder_id": self.folder_id,
+                "width": info["width"],
+                "height": info["height"],
+                "fps": info["fps"],
+                "file_size": info["size"]
             })
 
         self.finished.emit()
@@ -118,9 +126,13 @@ class MainWindow(QMainWindow):
         self.current_search_query = ""
         self.current_tag_filter: list[int] = []
         self.show_favorites_only = False
+        self.show_history_view = False
 
         self.setWindowTitle("Video Manager")
         self.setMinimumSize(1200, 700)
+
+        # Enable drag & drop
+        self.setAcceptDrops(True)
 
         self._setup_ui()
         self._setup_toolbar()
@@ -338,8 +350,15 @@ class MainWindow(QMainWindow):
         self.list_view.video_double_clicked.connect(self._play_video)
         self.list_view.context_menu_requested.connect(self._video_context_menu)
 
+        # Built-in video player
+        self.video_player = VideoPlayerWidget()
+        self.video_player.playback_started.connect(self._on_playback_started)
+        self.video_player.playback_stopped.connect(self._on_playback_stopped)
+        self.video_player.player_closed.connect(self._on_player_closed)
+
         self.view_stack.addWidget(self.grid_view)
         self.view_stack.addWidget(self.list_view)
+        self.view_stack.addWidget(self.video_player)
 
         right_layout.addWidget(self.view_stack)
 
@@ -375,6 +394,41 @@ class MainWindow(QMainWindow):
         self.video_info = QLabel("")
         self.video_info.setStyleSheet("color: #888; font-size: 12px;")
         detail_layout.addWidget(self.video_info)
+
+        # Progress bar for playback position
+        progress_row = QHBoxLayout()
+        progress_row.setSpacing(8)
+
+        self.progress_label = QLabel("Progress:")
+        self.progress_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.progress_label.setVisible(False)
+        progress_row.addWidget(self.progress_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #3d3d3d;
+                border: none;
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: #3498db;
+                border-radius: 4px;
+            }
+        """)
+        self.progress_bar.setVisible(False)
+        progress_row.addWidget(self.progress_bar)
+
+        self.resume_btn = QPushButton("Resume")
+        self.resume_btn.setFixedWidth(70)
+        self.resume_btn.setVisible(False)
+        self.resume_btn.clicked.connect(self._resume_playback)
+        progress_row.addWidget(self.resume_btn)
+
+        detail_layout.addLayout(progress_row)
 
         self.tag_widget = TagWidget()
         self.tag_widget.set_database(self.db)
@@ -417,6 +471,12 @@ class MainWindow(QMainWindow):
         tag_manager_action = QAction("Manage Tags", self)
         tag_manager_action.triggered.connect(self._open_tag_manager)
         toolbar.addAction(tag_manager_action)
+
+        toolbar.addSeparator()
+
+        stats_action = QAction("Statistics", self)
+        stats_action.triggered.connect(self._open_statistics)
+        toolbar.addAction(stats_action)
 
     def _setup_statusbar(self):
         """Setup the status bar."""
@@ -543,6 +603,10 @@ class MainWindow(QMainWindow):
         fav_item.setData(Qt.ItemDataRole.UserRole, "favorites")
         self.folder_list.addItem(fav_item)
 
+        history_item = QListWidgetItem("⏱ Recently Played")
+        history_item.setData(Qt.ItemDataRole.UserRole, "history")
+        self.folder_list.addItem(history_item)
+
         for folder in folders:
             item = QListWidgetItem(folder.name)
             item.setData(Qt.ItemDataRole.UserRole, folder.id)
@@ -591,7 +655,11 @@ class MainWindow(QMainWindow):
             filename=video_info["filename"],
             duration=video_info["duration"],
             thumbnail_path=video_info["thumbnail"],
-            folder_id=video_info["folder_id"]
+            folder_id=video_info["folder_id"],
+            width=video_info.get("width", 0),
+            height=video_info.get("height", 0),
+            fps=video_info.get("fps", 0.0),
+            file_size=video_info.get("file_size", 0)
         )
 
     def _on_scan_finished(self):
@@ -606,16 +674,26 @@ class MainWindow(QMainWindow):
         if data == "favorites":
             self.current_folder_id = None
             self.show_favorites_only = True
+            self.show_history_view = False
             self.favorites_btn.setChecked(True)
+        elif data == "history":
+            self.current_folder_id = None
+            self.show_favorites_only = False
+            self.show_history_view = True
+            self.favorites_btn.setChecked(False)
         else:
             self.current_folder_id = data
             self.show_favorites_only = False
+            self.show_history_view = False
             self.favorites_btn.setChecked(False)
         self._refresh_videos()
 
     def _refresh_videos(self):
         """Refresh video list with current filters."""
-        if self.current_tag_filter:
+        if self.show_history_view:
+            # Show recently played videos
+            videos = self.db.get_recent_videos(limit=50)
+        elif self.current_tag_filter:
             videos = self.db.get_videos_by_tags(
                 self.current_tag_filter,
                 sort_by=self.current_sort_by,
@@ -651,16 +729,56 @@ class MainWindow(QMainWindow):
         video = self.db.get_video(video_id)
         if video:
             self.video_title.setText(video.filename)
-            self.video_info.setText(
-                f"Duration: {video.duration_str} | Path: {video.path}"
-            )
+
+            # Build detailed info string
+            info_parts = [f"Duration: {video.duration_str}"]
+            if video.width and video.height:
+                info_parts.append(f"Resolution: {video.resolution_str}")
+            if video.file_size:
+                info_parts.append(f"Size: {format_file_size(video.file_size)}")
+            if video.play_count > 0:
+                info_parts.append(f"Plays: {video.play_count}")
+
+            self.video_info.setText(" | ".join(info_parts))
             self.tag_widget.set_video(video_id)
             self._update_favorite_button(video.favorite)
 
+            # Show playback progress if any
+            if video.playback_position > 0 and video.duration > 0:
+                progress = video.progress_percent
+                self.progress_label.setVisible(True)
+                self.progress_bar.setVisible(True)
+                self.progress_bar.setValue(int(progress))
+                self.resume_btn.setVisible(True)
+                self.progress_label.setText(
+                    f"Progress: {format_duration(video.playback_position)} / {video.duration_str}"
+                )
+            else:
+                self.progress_label.setVisible(False)
+                self.progress_bar.setVisible(False)
+                self.resume_btn.setVisible(False)
+
     def _play_video(self, video_id: int):
-        """Play the selected video."""
+        """Play the selected video with built-in player."""
+        self._play_video_builtin(video_id)
+
+    def _play_video_builtin(self, video_id: int, resume: bool = False):
+        """Play video with built-in player."""
         video = self.db.get_video(video_id)
         if video and os.path.exists(video.path):
+            start_pos = video.playback_position if resume else 0.0
+            if self.video_player.load_video(video_id, video.path, video.filename, start_pos):
+                self.view_stack.setCurrentWidget(self.video_player)
+                self.detail_panel.setVisible(False)
+                self.video_player.play()
+
+    def _play_video_external(self, video_id: int):
+        """Play the selected video with external player."""
+        video = self.db.get_video(video_id)
+        if video and os.path.exists(video.path):
+            # Record play in history
+            self.db.record_play(video_id)
+
             if sys.platform == "win32":
                 os.startfile(video.path)
             elif sys.platform == "darwin":
@@ -673,8 +791,15 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         video = self.db.get_video(video_id)
 
-        play_action = menu.addAction("Play")
-        play_action.triggered.connect(lambda: self._play_video(video_id))
+        play_action = menu.addAction("Play (External)")
+        play_action.triggered.connect(lambda: self._play_video_external(video_id))
+
+        play_builtin_action = menu.addAction("Play (Built-in Player)")
+        play_builtin_action.triggered.connect(lambda: self._play_video_builtin(video_id))
+
+        if video and video.playback_position > 0:
+            resume_action = menu.addAction(f"Resume from {format_duration(video.playback_position)}")
+            resume_action.triggered.connect(lambda: self._play_video_builtin(video_id, resume=True))
 
         menu.addSeparator()
 
@@ -799,6 +924,93 @@ class MainWindow(QMainWindow):
         dialog = TagManagerDialog(self.db, self)
         dialog.exec()
         self._refresh_tags()
+
+    def _open_statistics(self):
+        """Open statistics dialog."""
+        dialog = StatisticsDialog(self.db, self)
+        dialog.exec()
+
+    def _resume_playback(self):
+        """Resume playback of selected video."""
+        if self.selected_video_id:
+            self._play_video_builtin(self.selected_video_id, resume=True)
+
+    def _on_playback_started(self, video_id: int):
+        """Handle playback started."""
+        self.db.record_play(video_id)
+
+    def _on_playback_stopped(self, video_id: int, position: float):
+        """Handle playback stopped."""
+        video = self.db.get_video(video_id)
+        if video:
+            # Only save position if not near the end
+            if video.duration > 0 and position < (video.duration * 0.95):
+                self.db.update_playback_position(video_id, position)
+            else:
+                # Video finished, clear position
+                self.db.clear_playback_position(video_id)
+
+    def _on_player_closed(self):
+        """Handle player closed."""
+        self.view_stack.setCurrentWidget(self.grid_view)
+        self.detail_panel.setVisible(True)
+        self._refresh_videos()
+
+        # Re-select the video if any
+        if self.selected_video_id:
+            self._on_video_selected(self.selected_video_id)
+
+    # Drag and drop handlers
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Handle drag enter."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        """Handle drop event."""
+        urls = event.mimeData().urls()
+        folders_to_add = []
+        videos_to_add = []
+
+        for url in urls:
+            path = url.toLocalFile()
+            if os.path.isdir(path):
+                folders_to_add.append(path)
+            elif os.path.isfile(path) and is_video_file(path):
+                videos_to_add.append(path)
+
+        # Add folders
+        for folder_path in folders_to_add:
+            folder = self.db.add_folder(folder_path)
+            self._scan_folder(folder.id, folder_path, recursive=False)
+
+        # Add individual videos to a special "Dropped Videos" folder
+        if videos_to_add:
+            # Get or create a special folder for dropped videos
+            drop_folder_path = str(Path.home() / "Dropped Videos")
+            drop_folder = self.db.add_folder(drop_folder_path)
+
+            for video_path in videos_to_add:
+                info = get_video_info(video_path)
+                thumbnail = generate_thumbnail(video_path)
+                self.db.add_video(
+                    path=video_path,
+                    filename=os.path.basename(video_path),
+                    duration=info["duration"],
+                    thumbnail_path=thumbnail,
+                    folder_id=drop_folder.id,
+                    width=info["width"],
+                    height=info["height"],
+                    fps=info["fps"],
+                    file_size=info["size"]
+                )
+
+            self.statusbar.showMessage(f"Added {len(videos_to_add)} video(s)")
+
+        if folders_to_add:
+            self._load_folders()
+        elif videos_to_add:
+            self._refresh_videos()
 
     def closeEvent(self, event):
         """Handle window close."""

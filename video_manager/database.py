@@ -4,7 +4,7 @@ import sqlite3
 import os
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -19,6 +19,13 @@ class Video:
     folder_id: int
     favorite: bool = False
     created_at: Optional[str] = None
+    last_played: Optional[str] = None
+    play_count: int = 0
+    playback_position: float = 0.0
+    width: int = 0
+    height: int = 0
+    fps: float = 0.0
+    file_size: int = 0
 
     @property
     def duration_str(self) -> str:
@@ -29,6 +36,20 @@ class Video:
         if hours > 0:
             return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         return f"{minutes:02d}:{seconds:02d}"
+
+    @property
+    def resolution_str(self) -> str:
+        """Format resolution as WxH."""
+        if self.width and self.height:
+            return f"{self.width}x{self.height}"
+        return "Unknown"
+
+    @property
+    def progress_percent(self) -> float:
+        """Get playback progress as percentage."""
+        if self.duration > 0:
+            return (self.playback_position / self.duration) * 100
+        return 0.0
 
 
 @dataclass
@@ -44,6 +65,27 @@ class Tag:
     """Tag data model."""
     id: Optional[int]
     name: str
+
+
+@dataclass
+class PlayHistory:
+    """Play history entry."""
+    id: Optional[int]
+    video_id: int
+    played_at: str
+    video: Optional[Video] = None
+
+
+@dataclass
+class Statistics:
+    """Library statistics."""
+    total_videos: int = 0
+    total_duration: float = 0.0
+    total_size: int = 0
+    favorites_count: int = 0
+    tags_count: int = 0
+    folders_count: int = 0
+    recently_played: int = 0
 
 
 class Database:
@@ -83,6 +125,13 @@ class Database:
                 folder_id INTEGER,
                 favorite INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_played TEXT,
+                play_count INTEGER DEFAULT 0,
+                playback_position REAL DEFAULT 0,
+                width INTEGER DEFAULT 0,
+                height INTEGER DEFAULT 0,
+                fps REAL DEFAULT 0,
+                file_size INTEGER DEFAULT 0,
                 FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE
             )
         """)
@@ -105,11 +154,23 @@ class Database:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS play_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id INTEGER NOT NULL,
+                played_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE
+            )
+        """)
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_folder ON videos (folder_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_filename ON videos (filename)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_favorite ON videos (favorite)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_last_played ON videos (last_played)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_tags_video ON video_tags (video_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_tags_tag ON video_tags (tag_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_play_history_video ON play_history (video_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_play_history_date ON play_history (played_at)")
 
         self.conn.commit()
 
@@ -120,16 +181,27 @@ class Database:
         cursor.execute("PRAGMA table_info(videos)")
         columns = [col[1] for col in cursor.fetchall()]
 
-        if "favorite" not in columns:
-            cursor.execute("ALTER TABLE videos ADD COLUMN favorite INTEGER DEFAULT 0")
+        migrations = [
+            ("favorite", "INTEGER DEFAULT 0"),
+            ("created_at", "TEXT DEFAULT CURRENT_TIMESTAMP"),
+            ("last_played", "TEXT"),
+            ("play_count", "INTEGER DEFAULT 0"),
+            ("playback_position", "REAL DEFAULT 0"),
+            ("width", "INTEGER DEFAULT 0"),
+            ("height", "INTEGER DEFAULT 0"),
+            ("fps", "REAL DEFAULT 0"),
+            ("file_size", "INTEGER DEFAULT 0"),
+        ]
 
-        if "created_at" not in columns:
-            cursor.execute("ALTER TABLE videos ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP")
+        for col_name, col_type in migrations:
+            if col_name not in columns:
+                cursor.execute(f"ALTER TABLE videos ADD COLUMN {col_name} {col_type}")
 
         self.conn.commit()
 
     def _row_to_video(self, row) -> Video:
         """Convert database row to Video object."""
+        keys = row.keys()
         return Video(
             id=row["id"],
             path=row["path"],
@@ -137,8 +209,15 @@ class Database:
             duration=row["duration"],
             thumbnail_path=row["thumbnail_path"],
             folder_id=row["folder_id"],
-            favorite=bool(row["favorite"]) if "favorite" in row.keys() else False,
-            created_at=row["created_at"] if "created_at" in row.keys() else None
+            favorite=bool(row["favorite"]) if "favorite" in keys else False,
+            created_at=row["created_at"] if "created_at" in keys else None,
+            last_played=row["last_played"] if "last_played" in keys else None,
+            play_count=row["play_count"] if "play_count" in keys else 0,
+            playback_position=row["playback_position"] if "playback_position" in keys else 0.0,
+            width=row["width"] if "width" in keys else 0,
+            height=row["height"] if "height" in keys else 0,
+            fps=row["fps"] if "fps" in keys else 0.0,
+            file_size=row["file_size"] if "file_size" in keys else 0,
         )
 
     # Folder operations
@@ -171,19 +250,24 @@ class Database:
 
     # Video operations
     def add_video(self, path: str, filename: str, duration: float,
-                  thumbnail_path: Optional[str], folder_id: int) -> Video:
+                  thumbnail_path: Optional[str], folder_id: int,
+                  width: int = 0, height: int = 0, fps: float = 0.0,
+                  file_size: int = 0) -> Video:
         """Add a new video."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO videos (path, filename, duration, thumbnail_path, folder_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (path, filename, duration, thumbnail_path, folder_id, datetime.now().isoformat()))
+            INSERT OR REPLACE INTO videos
+            (path, filename, duration, thumbnail_path, folder_id, created_at, width, height, fps, file_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (path, filename, duration, thumbnail_path, folder_id,
+              datetime.now().isoformat(), width, height, fps, file_size))
         self.conn.commit()
 
         video_id = cursor.lastrowid
         return Video(
             id=video_id, path=path, filename=filename,
-            duration=duration, thumbnail_path=thumbnail_path, folder_id=folder_id
+            duration=duration, thumbnail_path=thumbnail_path, folder_id=folder_id,
+            width=width, height=height, fps=fps, file_size=file_size
         )
 
     def get_video(self, video_id: int) -> Optional[Video]:
@@ -201,7 +285,7 @@ class Database:
         """Get videos with filtering and sorting options."""
         cursor = self.conn.cursor()
 
-        valid_sort_columns = {"filename", "duration", "created_at", "favorite"}
+        valid_sort_columns = {"filename", "duration", "created_at", "favorite", "last_played", "play_count"}
         if sort_by not in valid_sort_columns:
             sort_by = "filename"
         sort_order = "DESC" if sort_order.lower() == "desc" else "ASC"
@@ -223,7 +307,7 @@ class Database:
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         if sort_by == "favorite":
-            order_clause = f"ORDER BY favorite DESC, filename ASC"
+            order_clause = "ORDER BY favorite DESC, filename ASC"
         else:
             order_clause = f"ORDER BY {sort_by} {sort_order}"
 
@@ -270,6 +354,17 @@ class Database:
         """Get all favorite videos."""
         return self.get_videos(favorites_only=True, sort_by=sort_by, sort_order=sort_order)
 
+    def get_recent_videos(self, limit: int = 20) -> list[Video]:
+        """Get recently played videos."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM videos
+            WHERE last_played IS NOT NULL
+            ORDER BY last_played DESC
+            LIMIT ?
+        """, (limit,))
+        return [self._row_to_video(row) for row in cursor.fetchall()]
+
     def toggle_favorite(self, video_id: int) -> bool:
         """Toggle favorite status and return new status."""
         cursor = self.conn.cursor()
@@ -302,6 +397,120 @@ class Database:
             (thumbnail_path, video_id)
         )
         self.conn.commit()
+
+    def update_video_metadata(self, video_id: int, width: int, height: int,
+                               fps: float, file_size: int):
+        """Update video metadata."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE videos SET width = ?, height = ?, fps = ?, file_size = ?
+            WHERE id = ?
+        """, (width, height, fps, file_size, video_id))
+        self.conn.commit()
+
+    # Playback tracking
+    def record_play(self, video_id: int):
+        """Record that a video was played."""
+        cursor = self.conn.cursor()
+        now = datetime.now().isoformat()
+
+        cursor.execute("""
+            UPDATE videos SET last_played = ?, play_count = play_count + 1
+            WHERE id = ?
+        """, (now, video_id))
+
+        cursor.execute("""
+            INSERT INTO play_history (video_id, played_at) VALUES (?, ?)
+        """, (video_id, now))
+
+        self.conn.commit()
+
+    def update_playback_position(self, video_id: int, position: float):
+        """Update playback position for a video."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE videos SET playback_position = ? WHERE id = ?",
+            (position, video_id)
+        )
+        self.conn.commit()
+
+    def get_playback_position(self, video_id: int) -> float:
+        """Get saved playback position for a video."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT playback_position FROM videos WHERE id = ?", (video_id,))
+        row = cursor.fetchone()
+        return row["playback_position"] if row else 0.0
+
+    def clear_playback_position(self, video_id: int):
+        """Clear playback position (video finished)."""
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE videos SET playback_position = 0 WHERE id = ?", (video_id,))
+        self.conn.commit()
+
+    def get_play_history(self, limit: int = 50) -> list[PlayHistory]:
+        """Get play history with video details."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT ph.id, ph.video_id, ph.played_at, v.*
+            FROM play_history ph
+            JOIN videos v ON ph.video_id = v.id
+            ORDER BY ph.played_at DESC
+            LIMIT ?
+        """, (limit,))
+
+        history = []
+        for row in cursor.fetchall():
+            video = self._row_to_video(row)
+            history.append(PlayHistory(
+                id=row["id"],
+                video_id=row["video_id"],
+                played_at=row["played_at"],
+                video=video
+            ))
+        return history
+
+    def clear_play_history(self):
+        """Clear all play history."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM play_history")
+        self.conn.commit()
+
+    # Statistics
+    def get_statistics(self) -> Statistics:
+        """Get library statistics."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) as count, SUM(duration) as duration, SUM(file_size) as size FROM videos")
+        row = cursor.fetchone()
+        total_videos = row["count"] or 0
+        total_duration = row["duration"] or 0.0
+        total_size = row["size"] or 0
+
+        cursor.execute("SELECT COUNT(*) as count FROM videos WHERE favorite = 1")
+        favorites_count = cursor.fetchone()["count"]
+
+        cursor.execute("SELECT COUNT(*) as count FROM tags")
+        tags_count = cursor.fetchone()["count"]
+
+        cursor.execute("SELECT COUNT(*) as count FROM folders")
+        folders_count = cursor.fetchone()["count"]
+
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM videos
+            WHERE last_played IS NOT NULL
+            AND datetime(last_played) > datetime('now', '-7 days')
+        """)
+        recently_played = cursor.fetchone()["count"]
+
+        return Statistics(
+            total_videos=total_videos,
+            total_duration=total_duration,
+            total_size=total_size,
+            favorites_count=favorites_count,
+            tags_count=tags_count,
+            folders_count=folders_count,
+            recently_played=recently_played
+        )
 
     # Tag operations
     def add_tag(self, name: str) -> Tag:
