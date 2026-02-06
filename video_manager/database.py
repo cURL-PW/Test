@@ -26,6 +26,7 @@ class Video:
     height: int = 0
     fps: float = 0.0
     file_size: int = 0
+    file_hash: Optional[str] = None
 
     @property
     def duration_str(self) -> str:
@@ -86,6 +87,43 @@ class Statistics:
     tags_count: int = 0
     folders_count: int = 0
     recently_played: int = 0
+
+
+@dataclass
+class Playlist:
+    """Playlist data model."""
+    id: Optional[int]
+    name: str
+    created_at: Optional[str] = None
+
+
+@dataclass
+class PlaylistItem:
+    """Playlist item data model."""
+    id: Optional[int]
+    playlist_id: int
+    video_id: int
+    position: int
+    video: Optional[Video] = None
+
+
+@dataclass
+class SmartCollection:
+    """Smart collection data model."""
+    id: Optional[int]
+    name: str
+    filter_type: str  # duration, resolution, size, recent
+    filter_operator: str  # gt, lt, eq
+    filter_value: str
+
+
+@dataclass
+class AppSettings:
+    """Application settings."""
+    theme: str = "dark"
+    thumbnail_size: int = 180
+    window_geometry: Optional[str] = None
+    splitter_sizes: Optional[str] = None
 
 
 class Database:
@@ -163,6 +201,45 @@ class Database:
             )
         """)
 
+        # Playlists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS playlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                playlist_id INTEGER NOT NULL,
+                video_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE,
+                FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE
+            )
+        """)
+
+        # Smart collections
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS smart_collections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                filter_type TEXT NOT NULL,
+                filter_operator TEXT NOT NULL,
+                filter_value TEXT NOT NULL
+            )
+        """)
+
+        # Settings
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_folder ON videos (folder_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_filename ON videos (filename)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_favorite ON videos (favorite)")
@@ -171,6 +248,7 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_tags_tag ON video_tags (tag_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_play_history_video ON play_history (video_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_play_history_date ON play_history (played_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items (playlist_id)")
 
         self.conn.commit()
 
@@ -191,6 +269,7 @@ class Database:
             ("height", "INTEGER DEFAULT 0"),
             ("fps", "REAL DEFAULT 0"),
             ("file_size", "INTEGER DEFAULT 0"),
+            ("file_hash", "TEXT"),
         ]
 
         for col_name, col_type in migrations:
@@ -218,6 +297,7 @@ class Database:
             height=row["height"] if "height" in keys else 0,
             fps=row["fps"] if "fps" in keys else 0.0,
             file_size=row["file_size"] if "file_size" in keys else 0,
+            file_hash=row["file_hash"] if "file_hash" in keys else None,
         )
 
     # Folder operations
@@ -575,6 +655,329 @@ class Database:
         """, (video_id,))
         return [Tag(id=row["id"], name=row["name"])
                 for row in cursor.fetchall()]
+
+    # Playlist operations
+    def create_playlist(self, name: str) -> Playlist:
+        """Create a new playlist."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT INTO playlists (name) VALUES (?)",
+            (name,)
+        )
+        self.conn.commit()
+        return Playlist(id=cursor.lastrowid, name=name)
+
+    def get_playlists(self) -> list[Playlist]:
+        """Get all playlists."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM playlists ORDER BY name")
+        return [Playlist(id=row["id"], name=row["name"], created_at=row["created_at"])
+                for row in cursor.fetchall()]
+
+    def get_playlist(self, playlist_id: int) -> Optional[Playlist]:
+        """Get a playlist by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
+        row = cursor.fetchone()
+        if row:
+            return Playlist(id=row["id"], name=row["name"], created_at=row["created_at"])
+        return None
+
+    def update_playlist(self, playlist_id: int, name: str):
+        """Update playlist name."""
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE playlists SET name = ? WHERE id = ?", (name, playlist_id))
+        self.conn.commit()
+
+    def delete_playlist(self, playlist_id: int):
+        """Delete a playlist."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+        self.conn.commit()
+
+    def add_to_playlist(self, playlist_id: int, video_id: int):
+        """Add a video to a playlist."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT MAX(position) FROM playlist_items WHERE playlist_id = ?",
+            (playlist_id,)
+        )
+        row = cursor.fetchone()
+        position = (row[0] or 0) + 1
+
+        cursor.execute(
+            "INSERT INTO playlist_items (playlist_id, video_id, position) VALUES (?, ?, ?)",
+            (playlist_id, video_id, position)
+        )
+        self.conn.commit()
+
+    def remove_from_playlist(self, playlist_id: int, video_id: int):
+        """Remove a video from a playlist."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ? AND video_id = ?",
+            (playlist_id, video_id)
+        )
+        self.conn.commit()
+
+    def get_playlist_videos(self, playlist_id: int) -> list[Video]:
+        """Get all videos in a playlist."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT v.* FROM videos v
+            JOIN playlist_items pi ON v.id = pi.video_id
+            WHERE pi.playlist_id = ?
+            ORDER BY pi.position
+        """, (playlist_id,))
+        return [self._row_to_video(row) for row in cursor.fetchall()]
+
+    def reorder_playlist(self, playlist_id: int, video_ids: list[int]):
+        """Reorder videos in a playlist."""
+        cursor = self.conn.cursor()
+        for i, video_id in enumerate(video_ids):
+            cursor.execute(
+                "UPDATE playlist_items SET position = ? WHERE playlist_id = ? AND video_id = ?",
+                (i, playlist_id, video_id)
+            )
+        self.conn.commit()
+
+    # Smart collection operations
+    def create_smart_collection(self, name: str, filter_type: str,
+                                 filter_operator: str, filter_value: str) -> SmartCollection:
+        """Create a smart collection."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT INTO smart_collections (name, filter_type, filter_operator, filter_value) VALUES (?, ?, ?, ?)",
+            (name, filter_type, filter_operator, filter_value)
+        )
+        self.conn.commit()
+        return SmartCollection(
+            id=cursor.lastrowid, name=name,
+            filter_type=filter_type, filter_operator=filter_operator, filter_value=filter_value
+        )
+
+    def get_smart_collections(self) -> list[SmartCollection]:
+        """Get all smart collections."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM smart_collections ORDER BY name")
+        return [SmartCollection(
+            id=row["id"], name=row["name"],
+            filter_type=row["filter_type"], filter_operator=row["filter_operator"],
+            filter_value=row["filter_value"]
+        ) for row in cursor.fetchall()]
+
+    def delete_smart_collection(self, collection_id: int):
+        """Delete a smart collection."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM smart_collections WHERE id = ?", (collection_id,))
+        self.conn.commit()
+
+    def get_smart_collection_videos(self, collection: SmartCollection) -> list[Video]:
+        """Get videos matching smart collection criteria."""
+        cursor = self.conn.cursor()
+
+        # Build query based on filter type
+        if collection.filter_type == "duration":
+            value = float(collection.filter_value) * 60  # Convert minutes to seconds
+            if collection.filter_operator == "gt":
+                condition = f"duration > {value}"
+            elif collection.filter_operator == "lt":
+                condition = f"duration < {value}"
+            else:
+                condition = f"duration = {value}"
+        elif collection.filter_type == "resolution":
+            if collection.filter_value == "4k":
+                condition = "width >= 3840"
+            elif collection.filter_value == "1080p":
+                condition = "height >= 1080 AND height < 2160"
+            elif collection.filter_value == "720p":
+                condition = "height >= 720 AND height < 1080"
+            else:
+                condition = "height < 720"
+        elif collection.filter_type == "size":
+            value = float(collection.filter_value) * 1024 * 1024  # Convert MB to bytes
+            if collection.filter_operator == "gt":
+                condition = f"file_size > {value}"
+            elif collection.filter_operator == "lt":
+                condition = f"file_size < {value}"
+            else:
+                condition = f"file_size = {value}"
+        elif collection.filter_type == "recent":
+            days = int(collection.filter_value)
+            condition = f"datetime(created_at) > datetime('now', '-{days} days')"
+        else:
+            return []
+
+        query = f"SELECT * FROM videos WHERE {condition} ORDER BY filename"
+        cursor.execute(query)
+        return [self._row_to_video(row) for row in cursor.fetchall()]
+
+    # Duplicate detection
+    def update_video_hash(self, video_id: int, file_hash: str):
+        """Update file hash for a video."""
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE videos SET file_hash = ? WHERE id = ?", (file_hash, video_id))
+        self.conn.commit()
+
+    def find_duplicates(self) -> list[list[Video]]:
+        """Find duplicate videos by file hash."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT file_hash, COUNT(*) as cnt FROM videos
+            WHERE file_hash IS NOT NULL AND file_hash != ''
+            GROUP BY file_hash HAVING cnt > 1
+        """)
+        duplicate_groups = []
+        for row in cursor.fetchall():
+            cursor.execute("SELECT * FROM videos WHERE file_hash = ?", (row["file_hash"],))
+            videos = [self._row_to_video(r) for r in cursor.fetchall()]
+            duplicate_groups.append(videos)
+        return duplicate_groups
+
+    def get_videos_without_hash(self) -> list[Video]:
+        """Get videos that don't have a file hash yet."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM videos WHERE file_hash IS NULL OR file_hash = ''")
+        return [self._row_to_video(row) for row in cursor.fetchall()]
+
+    # Missing files check
+    def find_missing_files(self) -> list[Video]:
+        """Find videos whose files no longer exist."""
+        import os
+        videos = self.get_videos()
+        return [v for v in videos if not os.path.exists(v.path)]
+
+    # Settings operations
+    def get_setting(self, key: str, default: str = "") -> str:
+        """Get a setting value."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str):
+        """Set a setting value."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+        self.conn.commit()
+
+    def get_app_settings(self) -> AppSettings:
+        """Get all application settings."""
+        return AppSettings(
+            theme=self.get_setting("theme", "dark"),
+            thumbnail_size=int(self.get_setting("thumbnail_size", "180")),
+            window_geometry=self.get_setting("window_geometry"),
+            splitter_sizes=self.get_setting("splitter_sizes"),
+        )
+
+    def save_app_settings(self, settings: AppSettings):
+        """Save application settings."""
+        self.set_setting("theme", settings.theme)
+        self.set_setting("thumbnail_size", str(settings.thumbnail_size))
+        if settings.window_geometry:
+            self.set_setting("window_geometry", settings.window_geometry)
+        if settings.splitter_sizes:
+            self.set_setting("splitter_sizes", settings.splitter_sizes)
+
+    # Recently added videos
+    def get_recently_added(self, days: int = 7, limit: int = 50) -> list[Video]:
+        """Get recently added videos."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM videos
+            WHERE datetime(created_at) > datetime('now', ? || ' days')
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (f"-{days}", limit))
+        return [self._row_to_video(row) for row in cursor.fetchall()]
+
+    # Advanced search
+    def advanced_search(self, search_query: str = "", min_duration: float = 0,
+                        max_duration: float = 0, min_resolution: int = 0,
+                        min_size: int = 0, max_size: int = 0,
+                        tags: list[int] = None) -> list[Video]:
+        """Advanced search with multiple criteria."""
+        cursor = self.conn.cursor()
+        conditions = []
+        params = []
+
+        if search_query:
+            conditions.append("filename LIKE ?")
+            params.append(f"%{search_query}%")
+
+        if min_duration > 0:
+            conditions.append("duration >= ?")
+            params.append(min_duration)
+
+        if max_duration > 0:
+            conditions.append("duration <= ?")
+            params.append(max_duration)
+
+        if min_resolution > 0:
+            conditions.append("height >= ?")
+            params.append(min_resolution)
+
+        if min_size > 0:
+            conditions.append("file_size >= ?")
+            params.append(min_size)
+
+        if max_size > 0:
+            conditions.append("file_size <= ?")
+            params.append(max_size)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"SELECT * FROM videos {where_clause} ORDER BY filename"
+        cursor.execute(query, params)
+        videos = [self._row_to_video(row) for row in cursor.fetchall()]
+
+        # Filter by tags if specified
+        if tags:
+            video_ids = set()
+            for tag_id in tags:
+                cursor.execute(
+                    "SELECT video_id FROM video_tags WHERE tag_id = ?",
+                    (tag_id,)
+                )
+                tag_video_ids = {row["video_id"] for row in cursor.fetchall()}
+                video_ids = video_ids.intersection(tag_video_ids) if video_ids else tag_video_ids
+            videos = [v for v in videos if v.id in video_ids]
+
+        return videos
+
+    # Auto-tagging
+    def auto_tag_video(self, video_id: int, path: str):
+        """Auto-generate tags from filename and path."""
+        import os
+        import re
+
+        filename = os.path.basename(path)
+        parent_folder = os.path.basename(os.path.dirname(path))
+
+        # Clean filename: remove extension and common patterns
+        name = os.path.splitext(filename)[0]
+        name = re.sub(r'[\[\]\(\)\{\}]', ' ', name)
+        name = re.sub(r'[_\-\.]', ' ', name)
+        name = re.sub(r'\s+', ' ', name).strip()
+
+        # Extract potential tags
+        words = set()
+        for word in name.split():
+            if len(word) >= 3 and not word.isdigit():
+                words.add(word.lower())
+
+        if parent_folder and len(parent_folder) >= 3:
+            words.add(parent_folder.lower())
+
+        # Add existing tags that match
+        existing_tags = self.get_tags()
+        tag_names = {t.name.lower(): t for t in existing_tags}
+
+        for word in words:
+            if word in tag_names:
+                self.add_video_tag(video_id, tag_names[word].id)
 
     def close(self):
         """Close database connection."""

@@ -8,11 +8,11 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QFileDialog, QMenu, QToolBar, QStatusBar,
-    QListWidget, QListWidgetItem, QStackedWidget, QFrame,
-    QMessageBox, QProgressDialog, QApplication, QLineEdit,
+    QListWidget, QListWidgetItem, QStackedWidget, QFrame, QMenuBar,
+    QMessageBox, QProgressDialog, QApplication, QLineEdit, QSlider,
     QComboBox, QCheckBox, QDialog, QDialogButtonBox, QProgressBar
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QMimeData
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QMimeData, QByteArray
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
 
 from .database import Database, Video
@@ -25,6 +25,11 @@ from .widgets.video_item import VideoGridWidget, VideoListWidget
 from .widgets.tag_widget import TagWidget, TagFilterWidget, TagManagerDialog
 from .widgets.video_player import VideoPlayerWidget
 from .widgets.statistics_dialog import StatisticsDialog
+from .widgets.dialogs import (
+    SettingsDialog, AdvancedSearchDialog, SmartCollectionDialog,
+    PlaylistDialog, DuplicateFinderDialog, ExportImportDialog,
+    MissingFilesDialog
+)
 
 
 class FolderAddDialog(QDialog):
@@ -127,6 +132,8 @@ class MainWindow(QMainWindow):
         self.current_tag_filter: list[int] = []
         self.show_favorites_only = False
         self.show_history_view = False
+        self.current_smart_collection = None
+        self.current_playlist_id = None
 
         self.setWindowTitle("Video Manager")
         self.setMinimumSize(1200, 700)
@@ -135,11 +142,13 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self._setup_ui()
+        self._setup_menubar()
         self._setup_toolbar()
         self._setup_statusbar()
         self._setup_shortcuts()
         self._load_folders()
-        self._apply_dark_theme()
+        self._load_settings()
+        self._restore_window_state()
 
     def _apply_dark_theme(self):
         """Apply dark theme to the application."""
@@ -442,6 +451,89 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(splitter)
 
+    def _setup_menubar(self):
+        """Setup the menu bar."""
+        menubar = self.menuBar()
+
+        # File menu
+        file_menu = menubar.addMenu("File")
+
+        add_folder_action = QAction("Add Folder...", self)
+        add_folder_action.setShortcut("Ctrl+O")
+        add_folder_action.triggered.connect(self._add_folder)
+        file_menu.addAction(add_folder_action)
+
+        file_menu.addSeparator()
+
+        export_action = QAction("Export/Import...", self)
+        export_action.triggered.connect(self._open_export_import)
+        file_menu.addAction(export_action)
+
+        file_menu.addSeparator()
+
+        settings_action = QAction("Settings...", self)
+        settings_action.setShortcut("Ctrl+,")
+        settings_action.triggered.connect(self._open_settings)
+        file_menu.addAction(settings_action)
+
+        # View menu
+        view_menu = menubar.addMenu("View")
+
+        grid_action = QAction("Grid View", self)
+        grid_action.setShortcut("Ctrl+1")
+        grid_action.triggered.connect(lambda: self._set_view_mode("grid"))
+        view_menu.addAction(grid_action)
+
+        list_action = QAction("List View", self)
+        list_action.setShortcut("Ctrl+2")
+        list_action.triggered.connect(lambda: self._set_view_mode("list"))
+        view_menu.addAction(list_action)
+
+        view_menu.addSeparator()
+
+        stats_action = QAction("Statistics...", self)
+        stats_action.triggered.connect(self._open_statistics)
+        view_menu.addAction(stats_action)
+
+        # Library menu
+        library_menu = menubar.addMenu("Library")
+
+        search_action = QAction("Advanced Search...", self)
+        search_action.setShortcut("Ctrl+Shift+F")
+        search_action.triggered.connect(self._open_advanced_search)
+        library_menu.addAction(search_action)
+
+        library_menu.addSeparator()
+
+        smart_coll_action = QAction("New Smart Collection...", self)
+        smart_coll_action.triggered.connect(self._create_smart_collection)
+        library_menu.addAction(smart_coll_action)
+
+        playlist_action = QAction("Manage Playlists...", self)
+        playlist_action.triggered.connect(self._open_playlists)
+        library_menu.addAction(playlist_action)
+
+        library_menu.addSeparator()
+
+        duplicates_action = QAction("Find Duplicates...", self)
+        duplicates_action.triggered.connect(self._open_duplicates)
+        library_menu.addAction(duplicates_action)
+
+        missing_action = QAction("Check Missing Files...", self)
+        missing_action.triggered.connect(self._open_missing_files)
+        library_menu.addAction(missing_action)
+
+        # Tools menu
+        tools_menu = menubar.addMenu("Tools")
+
+        tag_manager_action = QAction("Manage Tags...", self)
+        tag_manager_action.triggered.connect(self._open_tag_manager)
+        tools_menu.addAction(tag_manager_action)
+
+        auto_tag_action = QAction("Auto-Tag Selected Video", self)
+        auto_tag_action.triggered.connect(self._auto_tag_selected)
+        tools_menu.addAction(auto_tag_action)
+
     def _setup_toolbar(self):
         """Setup the toolbar."""
         toolbar = QToolBar()
@@ -607,6 +699,40 @@ class MainWindow(QMainWindow):
         history_item.setData(Qt.ItemDataRole.UserRole, "history")
         self.folder_list.addItem(history_item)
 
+        recent_item = QListWidgetItem("🆕 Recently Added")
+        recent_item.setData(Qt.ItemDataRole.UserRole, "recent")
+        self.folder_list.addItem(recent_item)
+
+        # Smart Collections
+        smart_colls = self.db.get_smart_collections()
+        if smart_colls:
+            separator = QListWidgetItem("─── Smart ───")
+            separator.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.folder_list.addItem(separator)
+
+            for coll in smart_colls:
+                item = QListWidgetItem(f"🔍 {coll.name}")
+                item.setData(Qt.ItemDataRole.UserRole, ("smart", coll))
+                self.folder_list.addItem(item)
+
+        # Playlists
+        playlists = self.db.get_playlists()
+        if playlists:
+            separator = QListWidgetItem("─── Playlists ───")
+            separator.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.folder_list.addItem(separator)
+
+            for pl in playlists:
+                item = QListWidgetItem(f"📋 {pl.name}")
+                item.setData(Qt.ItemDataRole.UserRole, ("playlist", pl.id))
+                self.folder_list.addItem(item)
+
+        # Folders
+        if folders:
+            separator = QListWidgetItem("─── Folders ───")
+            separator.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.folder_list.addItem(separator)
+
         for folder in folders:
             item = QListWidgetItem(folder.name)
             item.setData(Qt.ItemDataRole.UserRole, folder.id)
@@ -671,28 +797,41 @@ class MainWindow(QMainWindow):
     def _on_folder_selected(self, item: QListWidgetItem):
         """Handle folder selection."""
         data = item.data(Qt.ItemDataRole.UserRole)
+
+        # Reset all filters
+        self.current_folder_id = None
+        self.show_favorites_only = False
+        self.show_history_view = False
+        self.current_smart_collection = None
+        self.current_playlist_id = None
+        self.favorites_btn.setChecked(False)
+
         if data == "favorites":
-            self.current_folder_id = None
             self.show_favorites_only = True
-            self.show_history_view = False
             self.favorites_btn.setChecked(True)
         elif data == "history":
-            self.current_folder_id = None
-            self.show_favorites_only = False
             self.show_history_view = True
-            self.favorites_btn.setChecked(False)
-        else:
+        elif data == "recent":
+            # Will be handled in _refresh_videos
+            pass
+        elif isinstance(data, tuple):
+            if data[0] == "smart":
+                self.current_smart_collection = data[1]
+            elif data[0] == "playlist":
+                self.current_playlist_id = data[1]
+        elif isinstance(data, int):
             self.current_folder_id = data
-            self.show_favorites_only = False
-            self.show_history_view = False
-            self.favorites_btn.setChecked(False)
+
         self._refresh_videos()
 
     def _refresh_videos(self):
         """Refresh video list with current filters."""
         if self.show_history_view:
-            # Show recently played videos
             videos = self.db.get_recent_videos(limit=50)
+        elif self.current_smart_collection:
+            videos = self.db.get_smart_collection_videos(self.current_smart_collection)
+        elif self.current_playlist_id:
+            videos = self.db.get_playlist_videos(self.current_playlist_id)
         elif self.current_tag_filter:
             videos = self.db.get_videos_by_tags(
                 self.current_tag_filter,
@@ -700,6 +839,18 @@ class MainWindow(QMainWindow):
                 sort_order=self.current_sort_order,
                 search_query=self.current_search_query
             )
+        elif self.current_folder_id is None and not self.show_favorites_only:
+            # Check if "Recently Added" is selected
+            current_item = self.folder_list.currentItem()
+            if current_item and current_item.data(Qt.ItemDataRole.UserRole) == "recent":
+                videos = self.db.get_recently_added(days=7, limit=50)
+            else:
+                videos = self.db.get_videos(
+                    sort_by=self.current_sort_by,
+                    sort_order=self.current_sort_order,
+                    search_query=self.current_search_query,
+                    favorites_only=self.show_favorites_only
+                )
         else:
             videos = self.db.get_videos(
                 folder_id=self.current_folder_id,
@@ -815,6 +966,18 @@ class MainWindow(QMainWindow):
         open_folder_action.triggered.connect(
             lambda: self._open_containing_folder(video_id)
         )
+
+        menu.addSeparator()
+
+        # Add to playlist submenu
+        playlists = self.db.get_playlists()
+        if playlists:
+            playlist_menu = menu.addMenu("Add to Playlist")
+            for pl in playlists:
+                pl_action = playlist_menu.addAction(pl.name)
+                pl_action.triggered.connect(
+                    lambda checked, pid=pl.id: self._add_to_playlist(video_id, pid)
+                )
 
         menu.addSeparator()
 
@@ -1012,7 +1175,165 @@ class MainWindow(QMainWindow):
         elif videos_to_add:
             self._refresh_videos()
 
+    # Settings and theme methods
+    def _load_settings(self):
+        """Load application settings."""
+        settings = self.db.get_app_settings()
+        if settings.theme == "light":
+            self._apply_light_theme()
+        else:
+            self._apply_dark_theme()
+
+    def _apply_light_theme(self):
+        """Apply light theme to the application."""
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background-color: #f5f5f5;
+                color: #333333;
+            }
+            QToolBar {
+                background-color: #e0e0e0;
+                border: none;
+                spacing: 8px;
+                padding: 4px;
+            }
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cccccc;
+                padding: 6px 12px;
+                border-radius: 4px;
+                color: #333333;
+            }
+            QPushButton:hover {
+                background-color: #e8e8e8;
+            }
+            QPushButton:pressed {
+                background-color: #d0d0d0;
+            }
+            QPushButton:checked {
+                background-color: #3498db;
+                color: white;
+            }
+            QListWidget {
+                background-color: #ffffff;
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #eeeeee;
+            }
+            QListWidget::item:selected {
+                background-color: #3498db;
+                color: white;
+            }
+            QListWidget::item:hover {
+                background-color: #f0f0f0;
+            }
+            QLineEdit {
+                background-color: #ffffff;
+                border: 1px solid #cccccc;
+                padding: 6px;
+                border-radius: 4px;
+                color: #333333;
+            }
+            QComboBox {
+                background-color: #ffffff;
+                border: 1px solid #cccccc;
+                padding: 5px 10px;
+                border-radius: 4px;
+                color: #333333;
+            }
+            QLabel {
+                color: #333333;
+            }
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #cccccc;
+            }
+            QMenu::item:selected {
+                background-color: #3498db;
+                color: white;
+            }
+            QStatusBar {
+                background-color: #e0e0e0;
+            }
+        """)
+
+    def _restore_window_state(self):
+        """Restore window geometry from settings."""
+        geometry = self.db.get_setting("window_geometry")
+        if geometry:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode()))
+
+    def _save_window_state(self):
+        """Save window geometry to settings."""
+        geometry = self.saveGeometry().toBase64().data().decode()
+        self.db.set_setting("window_geometry", geometry)
+
+    # New dialog methods
+    def _open_settings(self):
+        """Open settings dialog."""
+        dialog = SettingsDialog(self.db, self)
+        dialog.settings_changed.connect(self._load_settings)
+        dialog.exec()
+
+    def _open_advanced_search(self):
+        """Open advanced search dialog."""
+        dialog = AdvancedSearchDialog(self.db, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            videos = dialog.results
+            self.grid_view.set_videos(videos)
+            self.list_view.set_videos(videos)
+            self.statusbar.showMessage(f"Found {len(videos)} videos")
+
+    def _create_smart_collection(self):
+        """Create a new smart collection."""
+        dialog = SmartCollectionDialog(self.db, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._load_folders()
+
+    def _open_playlists(self):
+        """Open playlist manager dialog."""
+        dialog = PlaylistDialog(self.db, self)
+        dialog.exec()
+        self._load_folders()
+
+    def _open_duplicates(self):
+        """Open duplicate finder dialog."""
+        dialog = DuplicateFinderDialog(self.db, self)
+        dialog.exec()
+        self._refresh_videos()
+
+    def _open_missing_files(self):
+        """Open missing files dialog."""
+        dialog = MissingFilesDialog(self.db, self)
+        dialog.exec()
+        self._refresh_videos()
+
+    def _open_export_import(self):
+        """Open export/import dialog."""
+        dialog = ExportImportDialog(self.db, self)
+        dialog.exec()
+        self._load_folders()
+        self._refresh_tags()
+
+    def _add_to_playlist(self, video_id: int, playlist_id: int):
+        """Add a video to a playlist."""
+        self.db.add_to_playlist(playlist_id, video_id)
+        self.statusbar.showMessage("Added to playlist")
+
+    def _auto_tag_selected(self):
+        """Auto-tag the currently selected video."""
+        if self.selected_video_id:
+            video = self.db.get_video(self.selected_video_id)
+            if video:
+                self.db.auto_tag_video(self.selected_video_id, video.path)
+                self._on_video_selected(self.selected_video_id)
+                self.statusbar.showMessage("Auto-tagging applied")
+
     def closeEvent(self, event):
         """Handle window close."""
+        self._save_window_state()
         self.db.close()
         super().closeEvent(event)

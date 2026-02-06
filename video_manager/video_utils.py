@@ -26,6 +26,44 @@ def get_video_hash(video_path: str) -> str:
     return hashlib.md5(video_path.encode()).hexdigest()
 
 
+def get_file_hash(file_path: str, chunk_size: int = 65536) -> str:
+    """
+    Calculate MD5 hash of a file for duplicate detection.
+    Uses first and last chunks for faster processing of large files.
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        hasher = hashlib.md5()
+
+        with open(file_path, 'rb') as f:
+            # Read first chunk
+            chunk = f.read(chunk_size)
+            hasher.update(chunk)
+
+            # For larger files, also read middle and end
+            if file_size > chunk_size * 3:
+                # Read middle chunk
+                f.seek(file_size // 2)
+                chunk = f.read(chunk_size)
+                hasher.update(chunk)
+
+                # Read last chunk
+                f.seek(-chunk_size, 2)
+                chunk = f.read(chunk_size)
+                hasher.update(chunk)
+            elif file_size > chunk_size:
+                # Read remaining for smaller files
+                f.seek(-chunk_size, 2)
+                chunk = f.read(chunk_size)
+                hasher.update(chunk)
+
+        # Include file size in hash for extra uniqueness
+        hasher.update(str(file_size).encode())
+        return hasher.hexdigest()
+    except Exception:
+        return ""
+
+
 def get_video_duration(video_path: str) -> float:
     """Get the duration of a video in seconds using OpenCV."""
     try:
