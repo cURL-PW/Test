@@ -223,7 +223,8 @@ class AdvancedSearchDialog(QDialog):
         tags_layout = QVBoxLayout(tags_group)
         self.tags_list = QListWidget()
         self.tags_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        self.tags_list.setMaximumHeight(100)
+        self.tags_list.setMinimumHeight(80)
+        self.tags_list.setMaximumHeight(160)
         tags_layout.addWidget(self.tags_list)
 
         # Load tags

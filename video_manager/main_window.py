@@ -301,7 +301,8 @@ class MainWindow(QMainWindow):
         self.tag_filter.filter_changed.connect(self._on_tag_filter_changed)
         left_layout.addWidget(self.tag_filter)
 
-        left_panel.setFixedWidth(250)
+        left_panel.setMinimumWidth(180)
+        left_panel.setMaximumWidth(350)
         splitter.addWidget(left_panel)
 
         right_panel = QWidget()
@@ -378,7 +379,8 @@ class MainWindow(QMainWindow):
                 border-top: 1px solid #3d3d3d;
             }
         """)
-        self.detail_panel.setFixedHeight(120)
+        self.detail_panel.setMinimumHeight(130)
+        self.detail_panel.setMaximumHeight(170)
 
         detail_layout = QVBoxLayout(self.detail_panel)
         detail_layout.setContentsMargins(12, 8, 12, 8)
@@ -447,6 +449,10 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(right_panel)
         splitter.setSizes([250, 950])
+        splitter.setStretchFactor(0, 0)   # left panel: don't stretch
+        splitter.setStretchFactor(1, 1)   # right panel: absorb extra space
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
 
         main_layout.addWidget(splitter)
 

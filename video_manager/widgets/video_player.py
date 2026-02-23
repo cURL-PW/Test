@@ -116,7 +116,8 @@ class VideoPlayerWidget(QWidget):
 
         self.time_label = QLabel("00:00")
         self.time_label.setStyleSheet("color: #e0e0e0; font-size: 11px;")
-        self.time_label.setFixedWidth(60)
+        self.time_label.setMinimumWidth(52)
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         progress_layout.addWidget(self.time_label)
 
         self.progress_slider = QSlider(Qt.Orientation.Horizontal)
@@ -128,8 +129,8 @@ class VideoPlayerWidget(QWidget):
 
         self.duration_label = QLabel("00:00")
         self.duration_label.setStyleSheet("color: #e0e0e0; font-size: 11px;")
-        self.duration_label.setFixedWidth(60)
-        self.duration_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.duration_label.setMinimumWidth(52)
+        self.duration_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         progress_layout.addWidget(self.duration_label)
 
         control_layout.addLayout(progress_layout)

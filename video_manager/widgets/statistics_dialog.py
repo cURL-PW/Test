@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGridLayout, QPushButton, QWidget, QScrollArea
+    QGridLayout, QPushButton, QWidget, QScrollArea, QSizePolicy
 )
 from PyQt6.QtCore import Qt
 
@@ -22,7 +22,10 @@ class StatCard(QFrame):
                 border-radius: 8px;
             }
         """)
-        self.setFixedSize(180, 100)
+        self.setMinimumSize(140, 90)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -58,7 +61,7 @@ class HistoryItemWidget(QFrame):
                 background-color: #3d3d3d;
             }
         """)
-        self.setFixedHeight(40)
+        self.setMinimumHeight(40)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 4, 12, 4)
@@ -109,6 +112,9 @@ class StatisticsDialog(QDialog):
         cards_layout = QGridLayout(cards_widget)
         cards_layout.setSpacing(12)
         cards_layout.setContentsMargins(0, 0, 0, 0)
+        cards_layout.setColumnStretch(0, 1)
+        cards_layout.setColumnStretch(1, 1)
+        cards_layout.setColumnStretch(2, 1)
 
         self.total_videos_card = StatCard("Total Videos", "0")
         cards_layout.addWidget(self.total_videos_card, 0, 0)

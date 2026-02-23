@@ -118,7 +118,8 @@ class TagFilterWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setMaximumHeight(150)
+        scroll.setMinimumHeight(60)
+        scroll.setMaximumHeight(220)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         self.tags_container = QWidget()
