@@ -278,6 +278,14 @@ class VideoPlayerWidget(QWidget):
         self.ab_timer.setInterval(100)
         self.ab_timer.timeout.connect(self._check_ab_repeat)
 
+        # Seek debounce timer: fires 80 ms after the last slider move
+        self._seek_timer = QTimer()
+        self._seek_timer.setSingleShot(True)
+        self._seek_timer.setInterval(80)
+        self._seek_timer.timeout.connect(self._do_seek)
+        self._seek_target_pos = 0          # ms
+        self._was_playing = False          # state before drag began
+
     def _setup_shortcuts(self):
         """Setup keyboard shortcuts."""
         QShortcut(QKeySequence("Space"), self, self.toggle_play)
@@ -591,21 +599,35 @@ class VideoPlayerWidget(QWidget):
         print(f"Player error: {error_string}")
 
     def _on_slider_pressed(self):
-        """Handle slider press."""
+        """Handle slider press – freeze position updates and pause briefly."""
         self._is_seeking = True
+        self._was_playing = (
+            self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        )
+        if self._was_playing:
+            self.player.pause()
 
     def _on_slider_released(self):
-        """Handle slider release."""
+        """Handle slider release – commit final position and resume if needed."""
+        self._seek_timer.stop()
         self._is_seeking = False
         if self.player.duration() > 0:
             position = int((self.progress_slider.value() / 1000) * self.player.duration())
             self.player.setPosition(position)
+        if self._was_playing:
+            self.player.play()
 
     def _on_slider_moved(self, value: int):
-        """Handle slider move during drag."""
+        """Handle slider move – update time label and queue a seek."""
         if self.player.duration() > 0:
             position = int((value / 1000) * self.player.duration())
             self.time_label.setText(format_time(position))
+            self._seek_target_pos = position
+            self._seek_timer.start()   # restarts the 80 ms countdown
+
+    def _do_seek(self):
+        """Perform the debounced seek (called ~80 ms after last slider move)."""
+        self.player.setPosition(self._seek_target_pos)
 
     def _on_volume_changed(self, value: int):
         """Handle volume change."""
