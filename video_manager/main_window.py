@@ -21,7 +21,7 @@ from .video_utils import (
     get_video_duration, get_video_info, format_duration, format_file_size,
     is_video_file
 )
-from .widgets.video_item import VideoGridWidget, VideoListWidget
+from .widgets.video_item import VideoView
 from .widgets.tag_widget import TagWidget, TagFilterWidget, TagManagerDialog
 from .widgets.video_player import VideoPlayerWidget
 from .widgets.statistics_dialog import StatisticsDialog
@@ -348,13 +348,12 @@ class MainWindow(QMainWindow):
 
         self.view_stack = QStackedWidget()
 
-        self.grid_view = VideoGridWidget()
+        self.grid_view = VideoView("grid", db=self.db)
         self.grid_view.video_selected.connect(self._on_video_selected)
         self.grid_view.video_double_clicked.connect(self._play_video)
         self.grid_view.context_menu_requested.connect(self._video_context_menu)
 
-        self.list_view = VideoListWidget()
-        self.list_view.set_database(self.db)
+        self.list_view = VideoView("list", db=self.db)
         self.list_view.video_selected.connect(self._on_video_selected)
         self.list_view.video_double_clicked.connect(self._play_video)
         self.list_view.context_menu_requested.connect(self._video_context_menu)

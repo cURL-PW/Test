@@ -1,366 +1,308 @@
-"""Video item widgets for grid and list views."""
+"""Virtual-scroll video views using QListView + custom delegates."""
 
-import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QScrollArea, QGridLayout, QSizePolicy, QMenu
+    QListView, QAbstractItemView, QStyledItemDelegate, QStyle,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QPixmap, QAction
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QRect
+from PyQt6.QtGui import (
+    QPainter, QColor, QPen, QFont, QFontMetrics, QPixmap,
+    QPainterPath, QBrush,
+)
 
 from ..database import Video
-from ..video_utils import format_duration, format_file_size
+from ..video_utils import format_file_size
+from .video_model import VideoModel, VideoRole, ThumbnailRole, TagsRole
 
 
-class VideoThumbnail(QLabel):
-    """Thumbnail widget for video."""
+# ── Grid delegate ─────────────────────────────────────────────────────────────
 
-    def __init__(self, size: QSize = QSize(160, 90), parent=None):
-        super().__init__(parent)
-        self.thumb_size = size
-        self.setFixedSize(size)
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: #1a1a1a;
-                border-radius: 4px;
-            }
-        """)
-        self._set_placeholder()
+class VideoGridDelegate(QStyledItemDelegate):
+    """Paints a card-style grid item: thumbnail + title + duration."""
 
-    def _set_placeholder(self):
-        """Set placeholder when no thumbnail."""
-        self.setText("No Preview")
-        self.setStyleSheet(self.styleSheet() + "color: #666;")
+    ITEM_W  = 190
+    ITEM_H  = 170
+    THUMB_W = 162
+    THUMB_H = 91
+    RADIUS  = 8
 
-    def set_thumbnail(self, path: str):
-        """Load and display thumbnail."""
-        if path and os.path.exists(path):
-            pixmap = QPixmap(path)
-            if not pixmap.isNull():
-                scaled = pixmap.scaled(
-                    self.thumb_size,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-                self.setPixmap(scaled)
-                return
-        self._set_placeholder()
+    def paint(self, painter: QPainter, option, index):
+        video: Video = index.data(VideoRole)
+        if video is None:
+            return
 
+        thumb: QPixmap = index.data(ThumbnailRole)
 
-class VideoItemWidget(QFrame):
-    """Widget representing a single video item in grid view."""
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    clicked = pyqtSignal(int)
-    double_clicked = pyqtSignal(int)
-    context_menu_requested = pyqtSignal(int, object)
+        r = option.rect.adjusted(3, 3, -3, -3)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered  = bool(option.state & QStyle.StateFlag.State_MouseOver)
 
-    def __init__(self, video: Video, parent=None):
-        super().__init__(parent)
-        self.video = video
-        self.selected = False
-
-        self.setFixedSize(180, 160)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._update_style()
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
-
-        self.thumbnail = VideoThumbnail(QSize(160, 90))
-        if video.thumbnail_path:
-            self.thumbnail.set_thumbnail(video.thumbnail_path)
-        layout.addWidget(self.thumbnail)
-
-        self.title_label = QLabel(video.filename)
-        self.title_label.setWordWrap(True)
-        self.title_label.setMaximumHeight(32)
-        self.title_label.setStyleSheet("font-size: 11px;")
-        self.title_label.setToolTip(video.filename)
-        layout.addWidget(self.title_label)
-
-        self.duration_label = QLabel(video.duration_str)
-        self.duration_label.setStyleSheet("font-size: 10px; color: #888;")
-        layout.addWidget(self.duration_label)
-
-    def _update_style(self):
-        """Update widget style based on selection state."""
-        if self.selected:
-            self.setStyleSheet("""
-                VideoItemWidget {
-                    background-color: #2a4a6a;
-                    border: 2px solid #3498db;
-                    border-radius: 8px;
-                }
-            """)
+        if selected:
+            bg, border, bw = QColor("#2a4a6a"), QColor("#3498db"), 2
+        elif hovered:
+            bg, border, bw = QColor("#3d3d3d"), QColor("#4d4d4d"), 1
         else:
-            self.setStyleSheet("""
-                VideoItemWidget {
-                    background-color: #2d2d2d;
-                    border: 1px solid #3d3d3d;
-                    border-radius: 8px;
-                }
-                VideoItemWidget:hover {
-                    background-color: #3d3d3d;
-                    border: 1px solid #4d4d4d;
-                }
-            """)
+            bg, border, bw = QColor("#2d2d2d"), QColor("#3d3d3d"), 1
 
-    def set_selected(self, selected: bool):
-        """Set selection state."""
-        self.selected = selected
-        self._update_style()
+        path = QPainterPath()
+        path.addRoundedRect(float(r.x()), float(r.y()),
+                            float(r.width()), float(r.height()),
+                            self.RADIUS, self.RADIUS)
+        painter.fillPath(path, QBrush(bg))
+        painter.setPen(QPen(border, bw))
+        painter.drawPath(path)
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.video.id)
-        super().mousePressEvent(event)
+        # Thumbnail
+        pad_x     = (r.width() - self.THUMB_W) // 2
+        thumb_rect = QRect(r.left() + pad_x, r.top() + 8, self.THUMB_W, self.THUMB_H)
+        if thumb and not thumb.isNull():
+            ox = thumb_rect.left() + (self.THUMB_W - thumb.width()) // 2
+            oy = thumb_rect.top()  + (self.THUMB_H - thumb.height()) // 2
+            painter.drawPixmap(ox, oy, thumb)
+        else:
+            painter.fillRect(thumb_rect, QColor("#1a1a1a"))
+            painter.setPen(QColor("#555"))
+            f = painter.font()
+            f.setPixelSize(10)
+            painter.setFont(f)
+            painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "No Preview")
 
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.double_clicked.emit(self.video.id)
-        super().mouseDoubleClickEvent(event)
+        # Title (word-wrap, max 2 lines)
+        title_rect = QRect(r.left() + 6, thumb_rect.bottom() + 6,
+                           r.width() - 12, 32)
+        f = QFont()
+        f.setPixelSize(11)
+        painter.setFont(f)
+        painter.setPen(QColor("#e0e0e0"))
+        painter.drawText(
+            title_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            | Qt.TextFlag.TextWordWrap,
+            video.filename,
+        )
 
-    def contextMenuEvent(self, event):
-        self.context_menu_requested.emit(self.video.id, event.globalPos())
+        # Duration
+        dur_rect = QRect(r.left() + 6, title_rect.bottom() + 2,
+                         r.width() - 12, 16)
+        f.setPixelSize(10)
+        painter.setFont(f)
+        painter.setPen(QColor("#888"))
+        painter.drawText(
+            dur_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            video.duration_str,
+        )
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(self.ITEM_W, self.ITEM_H)
 
 
-class VideoListItemWidget(QFrame):
-    """Widget representing a single video item in list view."""
+# ── List delegate ─────────────────────────────────────────────────────────────
 
-    clicked = pyqtSignal(int)
-    double_clicked = pyqtSignal(int)
-    context_menu_requested = pyqtSignal(int, object)
+class VideoListDelegate(QStyledItemDelegate):
+    """Paints a row-style list item: thumbnail + title + metadata + tags."""
 
-    def __init__(self, video: Video, tags: list = None, parent=None):
-        super().__init__(parent)
-        self.video = video
-        self.selected = False
+    ITEM_H  = 66
+    THUMB_W = 80
+    THUMB_H = 45
 
-        self.setFixedHeight(60)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._update_style()
+    def paint(self, painter: QPainter, option, index):
+        video: Video = index.data(VideoRole)
+        if video is None:
+            return
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(12)
+        thumb: QPixmap = index.data(ThumbnailRole)
+        tags:  list    = index.data(TagsRole) or []
 
-        self.thumbnail = VideoThumbnail(QSize(80, 45))
-        if video.thumbnail_path:
-            self.thumbnail.set_thumbnail(video.thumbnail_path)
-        layout.addWidget(self.thumbnail)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(2)
+        r = option.rect.adjusted(4, 2, -4, -2)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered  = bool(option.state & QStyle.StateFlag.State_MouseOver)
 
-        self.title_label = QLabel(video.filename)
-        self.title_label.setStyleSheet("font-size: 13px; font-weight: bold;")
-        self.title_label.setToolTip(video.filename)
-        info_layout.addWidget(self.title_label)
+        if selected:
+            bg, border, bw = QColor("#2a4a6a"), QColor("#3498db"), 2
+        elif hovered:
+            bg, border, bw = QColor("#3d3d3d"), QColor("#4d4d4d"), 1
+        else:
+            bg, border, bw = QColor("#2d2d2d"), QColor("#3d3d3d"), 1
 
-        meta_layout = QHBoxLayout()
-        meta_layout.setSpacing(16)
+        path = QPainterPath()
+        path.addRoundedRect(float(r.x()), float(r.y()),
+                            float(r.width()), float(r.height()), 6, 6)
+        painter.fillPath(path, QBrush(bg))
+        painter.setPen(QPen(border, bw))
+        painter.drawPath(path)
 
-        self.duration_label = QLabel(f"Duration: {video.duration_str}")
-        self.duration_label.setStyleSheet("font-size: 11px; color: #888;")
-        meta_layout.addWidget(self.duration_label)
+        # Thumbnail
+        thumb_rect = QRect(
+            r.left() + 6,
+            r.top() + (r.height() - self.THUMB_H) // 2,
+            self.THUMB_W, self.THUMB_H,
+        )
+        if thumb and not thumb.isNull():
+            ox = thumb_rect.left() + (self.THUMB_W - thumb.width()) // 2
+            oy = thumb_rect.top()  + (self.THUMB_H - thumb.height()) // 2
+            painter.drawPixmap(ox, oy, thumb)
+        else:
+            painter.fillRect(thumb_rect, QColor("#1a1a1a"))
+            painter.setPen(QColor("#555"))
+            f = QFont()
+            f.setPixelSize(9)
+            painter.setFont(f)
+            painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "No Preview")
 
-        try:
-            size = os.path.getsize(video.path)
-            size_label = QLabel(f"Size: {format_file_size(size)}")
-            size_label.setStyleSheet("font-size: 11px; color: #888;")
-            meta_layout.addWidget(size_label)
-        except Exception:
-            pass
+        # Text area (reserve right side for tags if present)
+        text_x = thumb_rect.right() + 10
+        tag_col_w = 130 if tags else 0
+        text_w = r.right() - text_x - tag_col_w - 6
 
-        meta_layout.addStretch()
-        info_layout.addLayout(meta_layout)
+        # Title
+        f = QFont()
+        f.setPixelSize(13)
+        f.setBold(True)
+        painter.setFont(f)
+        painter.setPen(QColor("#e0e0e0"))
+        fm = QFontMetrics(f)
+        elided = fm.elidedText(video.filename, Qt.TextElideMode.ElideRight, text_w)
+        title_rect = QRect(text_x, r.top() + 8, text_w, 20)
+        painter.drawText(
+            title_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            elided,
+        )
 
-        layout.addLayout(info_layout, 1)
+        # Metadata line
+        meta_parts = [f"Duration: {video.duration_str}"]
+        if video.file_size:
+            meta_parts.append(f"Size: {format_file_size(video.file_size)}")
+        f.setPixelSize(11)
+        f.setBold(False)
+        painter.setFont(f)
+        painter.setPen(QColor("#888"))
+        meta_rect = QRect(text_x, title_rect.bottom() + 4, text_w, 16)
+        painter.drawText(
+            meta_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "  |  ".join(meta_parts),
+        )
 
+        # Tags (right-aligned column)
         if tags:
-            tags_layout = QHBoxLayout()
-            tags_layout.setSpacing(4)
+            tf = QFont()
+            tf.setPixelSize(10)
+            painter.setFont(tf)
+            tfm = QFontMetrics(tf)
+            tag_x = r.right() - tag_col_w
+            tag_y = r.top() + (r.height() - 20) // 2
             for tag in tags[:3]:
-                tag_label = QLabel(tag.name)
-                tag_label.setStyleSheet("""
-                    background-color: #4a4a4a;
-                    color: #e0e0e0;
-                    padding: 2px 8px;
-                    border-radius: 8px;
-                    font-size: 10px;
-                    border: 1px solid #5a5a5a;
-                """)
-                tags_layout.addWidget(tag_label)
-            if len(tags) > 3:
-                more_label = QLabel(f"+{len(tags) - 3}")
-                more_label.setStyleSheet("color: #888; font-size: 10px;")
-                tags_layout.addWidget(more_label)
-            layout.addLayout(tags_layout)
+                tw = tfm.horizontalAdvance(tag.name) + 14
+                tag_rect = QRect(tag_x, tag_y, tw, 20)
+                if tag_rect.right() > r.right() - 4:
+                    break
+                painter.fillRect(tag_rect, QColor("#4a4a4a"))
+                painter.setPen(QColor("#e0e0e0"))
+                painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, tag.name)
+                tag_x += tw + 4
 
-    def _update_style(self):
-        """Update widget style based on selection state."""
-        if self.selected:
-            self.setStyleSheet("""
-                VideoListItemWidget {
-                    background-color: #2a4a6a;
-                    border: 2px solid #3498db;
-                    border-radius: 6px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                VideoListItemWidget {
-                    background-color: #2d2d2d;
-                    border: 1px solid #3d3d3d;
-                    border-radius: 6px;
-                }
-                VideoListItemWidget:hover {
-                    background-color: #3d3d3d;
-                }
-            """)
+        painter.restore()
 
-    def set_selected(self, selected: bool):
-        """Set selection state."""
-        self.selected = selected
-        self._update_style()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.video.id)
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.double_clicked.emit(self.video.id)
-        super().mouseDoubleClickEvent(event)
-
-    def contextMenuEvent(self, event):
-        self.context_menu_requested.emit(self.video.id, event.globalPos())
+    def sizeHint(self, option, index):
+        return QSize(400, self.ITEM_H)
 
 
-class VideoGridWidget(QScrollArea):
-    """Grid view widget for displaying videos."""
+# ── Unified view ──────────────────────────────────────────────────────────────
 
-    video_selected = pyqtSignal(int)
+class VideoView(QListView):
+    """
+    QListView-based virtual-scroll view.
+    mode='grid'  → IconMode with VideoGridDelegate
+    mode='list'  → ListMode with VideoListDelegate
+
+    Only the ~10-20 visible items are ever painted, so 1000+ item
+    libraries open instantly.
+    """
+
+    video_selected       = pyqtSignal(int)
     video_double_clicked = pyqtSignal(int)
     context_menu_requested = pyqtSignal(int, object)
 
-    def __init__(self, parent=None):
+    def __init__(self, mode: str = "grid", db=None, parent=None):
         super().__init__(parent)
-        self.videos: dict[int, VideoItemWidget] = {}
-        self.selected_id = None
+        self.mode = mode
+        self.db   = db
 
-        self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setStyleSheet("QScrollArea { border: none; background-color: #1e1e1e; }")
+        self._model = VideoModel()
+        self.setModel(self._model)
+        self.setMouseTracking(True)
 
-        self.container = QWidget()
-        self.grid_layout = QGridLayout(self.container)
-        self.grid_layout.setSpacing(12)
-        self.grid_layout.setContentsMargins(12, 12, 12, 12)
-        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        if mode == "grid":
+            self._delegate = VideoGridDelegate()
+            self.setViewMode(QListView.ViewMode.IconMode)
+            gw = VideoGridDelegate.ITEM_W + 6
+            gh = VideoGridDelegate.ITEM_H + 6
+            self.setGridSize(QSize(gw, gh))
+            self.setResizeMode(QListView.ResizeMode.Adjust)
+            self.setWordWrap(True)
+        else:
+            self._delegate = VideoListDelegate()
+            self.setViewMode(QListView.ViewMode.ListMode)
+            self.setResizeMode(QListView.ResizeMode.Adjust)
 
-        self.setWidget(self.container)
+        self.setItemDelegate(self._delegate)
+        self.setUniformItemSizes(True)
+        self.setSpacing(2)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setStyleSheet("""
+            QListView {
+                background-color: #1e1e1e;
+                border: none;
+            }
+            QListView::item:selected { background: transparent; }
+            QListView::item:hover    { background: transparent; }
+        """)
+
+        self.selectionModel().currentChanged.connect(self._on_current_changed)
+        self.doubleClicked.connect(self._on_double_clicked)
+
+    # ── public API ────────────────────────────────────────────────────────────
 
     def set_videos(self, videos: list[Video]):
-        """Set videos to display."""
-        for widget in self.videos.values():
-            widget.deleteLater()
-        self.videos.clear()
-        self.selected_id = None
-
-        col = 0
-        row = 0
-        cols = max(1, self.width() // 195)
-
-        for video in videos:
-            widget = VideoItemWidget(video)
-            widget.clicked.connect(self._on_video_clicked)
-            widget.double_clicked.connect(self.video_double_clicked.emit)
-            widget.context_menu_requested.connect(self.context_menu_requested.emit)
-
-            self.grid_layout.addWidget(widget, row, col)
-            self.videos[video.id] = widget
-
-            col += 1
-            if col >= cols:
-                col = 0
-                row += 1
-
-    def _on_video_clicked(self, video_id: int):
-        """Handle video click."""
-        if self.selected_id and self.selected_id in self.videos:
-            self.videos[self.selected_id].set_selected(False)
-
-        self.selected_id = video_id
-        if video_id in self.videos:
-            self.videos[video_id].set_selected(True)
-
-        self.video_selected.emit(video_id)
-
-    def resizeEvent(self, event):
-        """Re-layout on resize."""
-        super().resizeEvent(event)
-        if self.videos:
-            videos = [w.video for w in self.videos.values()]
-            self.set_videos(videos)
-
-
-class VideoListWidget(QScrollArea):
-    """List view widget for displaying videos."""
-
-    video_selected = pyqtSignal(int)
-    video_double_clicked = pyqtSignal(int)
-    context_menu_requested = pyqtSignal(int, object)
-
-    def __init__(self, db=None, parent=None):
-        super().__init__(parent)
-        self.db = db
-        self.videos: dict[int, VideoListItemWidget] = {}
-        self.selected_id = None
-
-        self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setStyleSheet("QScrollArea { border: none; background-color: #1e1e1e; }")
-
-        self.container = QWidget()
-        self.list_layout = QVBoxLayout(self.container)
-        self.list_layout.setSpacing(6)
-        self.list_layout.setContentsMargins(8, 8, 8, 8)
-        self.list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        self.setWidget(self.container)
+        """Load videos into the model (replaces the old set_videos on grid/list widgets)."""
+        tags_map: dict[int, list] = {}
+        if self.mode == "list" and self.db and videos:
+            tags_map = self.db.get_tags_for_videos([v.id for v in videos])
+        self._model.set_videos(videos, tags_map)
 
     def set_database(self, db):
-        """Set database reference."""
         self.db = db
 
-    def set_videos(self, videos: list[Video]):
-        """Set videos to display."""
-        for widget in self.videos.values():
-            widget.deleteLater()
-        self.videos.clear()
-        self.selected_id = None
+    # ── slots ─────────────────────────────────────────────────────────────────
 
-        for video in videos:
-            tags = self.db.get_video_tags(video.id) if self.db else []
-            widget = VideoListItemWidget(video, tags)
-            widget.clicked.connect(self._on_video_clicked)
-            widget.double_clicked.connect(self.video_double_clicked.emit)
-            widget.context_menu_requested.connect(self.context_menu_requested.emit)
+    def _on_current_changed(self, current, _previous):
+        video = self._model.get_video(current.row())
+        if video:
+            self.video_selected.emit(video.id)
 
-            self.list_layout.addWidget(widget)
-            self.videos[video.id] = widget
+    def _on_double_clicked(self, index):
+        video = self._model.get_video(index.row())
+        if video:
+            self.video_double_clicked.emit(video.id)
 
-    def _on_video_clicked(self, video_id: int):
-        """Handle video click."""
-        if self.selected_id and self.selected_id in self.videos:
-            self.videos[self.selected_id].set_selected(False)
+    def contextMenuEvent(self, event):
+        index = self.indexAt(event.pos())
+        if index.isValid():
+            video = self._model.get_video(index.row())
+            if video:
+                self.context_menu_requested.emit(video.id, event.globalPos())
 
-        self.selected_id = video_id
-        if video_id in self.videos:
-            self.videos[video_id].set_selected(True)
 
-        self.video_selected.emit(video_id)
+# ── Backward-compat aliases (used in __init__.py / main_window.py) ────────────
+VideoGridWidget = VideoView   # type alias – callers can keep old name
+VideoListWidget = VideoView   # type alias

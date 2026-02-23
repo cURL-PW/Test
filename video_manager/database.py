@@ -656,6 +656,26 @@ class Database:
         return [Tag(id=row["id"], name=row["name"])
                 for row in cursor.fetchall()]
 
+    def get_tags_for_videos(self, video_ids: list[int]) -> dict[int, list[Tag]]:
+        """Get tags for multiple videos in a single query."""
+        if not video_ids:
+            return {}
+        cursor = self.conn.cursor()
+        placeholders = ",".join("?" * len(video_ids))
+        cursor.execute(f"""
+            SELECT vt.video_id, t.id, t.name FROM tags t
+            JOIN video_tags vt ON t.id = vt.tag_id
+            WHERE vt.video_id IN ({placeholders})
+            ORDER BY vt.video_id, t.name
+        """, video_ids)
+        result: dict[int, list[Tag]] = {}
+        for row in cursor.fetchall():
+            vid_id = row["video_id"]
+            if vid_id not in result:
+                result[vid_id] = []
+            result[vid_id].append(Tag(id=row["id"], name=row["name"]))
+        return result
+
     # Playlist operations
     def create_playlist(self, name: str) -> Playlist:
         """Create a new playlist."""
