@@ -24,6 +24,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Video Manager")
     app.setOrganizationName("VideoManager")
+    # Fusion renders QSS most consistently across platforms
+    app.setStyle("Fusion")
 
     window = MainWindow()
     window.show()

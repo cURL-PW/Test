@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
+from .. import theme
+
 
 class TagLabel(QWidget):
     """A single tag label widget with optional remove button."""
@@ -50,34 +52,38 @@ class TagLabel(QWidget):
         self._update_style()
 
     def _update_style(self):
-        """Update widget style."""
+        """Update widget style from the active theme."""
+        t = theme.current()
         if self.selected:
-            self.setStyleSheet("""
-                TagLabel {
-                    background-color: #2196F3;
-                    border: 2px solid #1976D2;
-                    border-radius: 12px;
-                }
-                QLabel {
-                    color: #ffffff;
+            self.setStyleSheet(f"""
+                TagLabel {{
+                    background-color: {t.accent};
+                    border: 1px solid {t.accent};
+                    border-radius: 13px;
+                }}
+                QLabel {{
+                    color: {t.on_accent};
                     font-size: 12px;
-                    font-weight: bold;
-                }
+                    font-weight: 600;
+                    background: transparent;
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                TagLabel {
-                    background-color: #4a4a4a;
-                    border: 1px solid #5a5a5a;
-                    border-radius: 12px;
-                }
-                TagLabel:hover {
-                    background-color: #5a5a5a;
-                }
-                QLabel {
-                    color: #e0e0e0;
+            self.setStyleSheet(f"""
+                TagLabel {{
+                    background-color: {t.surface3};
+                    border: 1px solid {t.border_strong};
+                    border-radius: 13px;
+                }}
+                TagLabel:hover {{
+                    background-color: {t.accent_soft};
+                    border-color: {t.accent};
+                }}
+                QLabel {{
+                    color: {t.text};
                     font-size: 12px;
-                }
+                    background: transparent;
+                }}
             """)
 
     def set_selected(self, selected: bool):
@@ -219,7 +225,7 @@ class TagSelectorDialog(QDialog):
 
         ok_btn = QPushButton("Add Selected")
         ok_btn.clicked.connect(self.accept)
-        ok_btn.setStyleSheet("background-color: #2196F3;")
+        ok_btn.setObjectName("accentBtn")
         button_layout.addWidget(ok_btn)
 
         layout.addLayout(button_layout)
@@ -302,6 +308,7 @@ class TagWidget(QWidget):
         layout.addLayout(header)
 
         self.tags_container = QWidget()
+        self.tags_container.setObjectName("flowContainer")
         self.tags_flow = QHBoxLayout(self.tags_container)
         self.tags_flow.setContentsMargins(0, 0, 0, 0)
         self.tags_flow.setSpacing(6)
@@ -379,7 +386,7 @@ class TagManagerDialog(QDialog):
         self.add_btn = QPushButton("Add Tag")
         self.add_btn.setFixedWidth(100)
         self.add_btn.clicked.connect(self._add_tag)
-        self.add_btn.setStyleSheet("background-color: #2196F3;")
+        self.add_btn.setObjectName("accentBtn")
         add_layout.addWidget(self.add_btn)
 
         layout.addLayout(add_layout)

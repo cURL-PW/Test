@@ -70,7 +70,7 @@ class VideoPlayerWidget(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         label = QLabel("PyQt6 Multimedia module not available.\n"
-                      "Install with: pip install PyQt6-Multimedia")
+                      "Install with: pip install PyQt6")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setStyleSheet("color: #888; font-size: 14px;")
         layout.addWidget(label)
@@ -81,14 +81,11 @@ class VideoPlayerWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        self.setObjectName("playerRoot")
+
         # Title bar
         self.title_label = QLabel()
-        self.title_label.setStyleSheet("""
-            background-color: #2d2d2d;
-            color: #e0e0e0;
-            padding: 8px;
-            font-weight: bold;
-        """)
+        self.title_label.setObjectName("playerTitle")
         layout.addWidget(self.title_label)
 
         # Video display area
@@ -100,12 +97,7 @@ class VideoPlayerWidget(QWidget):
 
         # Control bar
         control_bar = QFrame()
-        control_bar.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a1a;
-                border-top: 1px solid #3d3d3d;
-            }
-        """)
+        control_bar.setObjectName("playerBar")
         control_layout = QVBoxLayout(control_bar)
         control_layout.setContentsMargins(8, 4, 8, 8)
         control_layout.setSpacing(4)
@@ -139,13 +131,14 @@ class VideoPlayerWidget(QWidget):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(8)
 
-        self.play_btn = QPushButton("Play")
-        self.play_btn.setFixedWidth(70)
+        self.play_btn = QPushButton("▶  Play")
+        self.play_btn.setObjectName("playBtn")
+        self.play_btn.setFixedWidth(90)
         self.play_btn.clicked.connect(self.toggle_play)
         button_layout.addWidget(self.play_btn)
 
-        self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setFixedWidth(70)
+        self.stop_btn = QPushButton("■  Stop")
+        self.stop_btn.setFixedWidth(80)
         self.stop_btn.clicked.connect(self.stop)
         button_layout.addWidget(self.stop_btn)
 
@@ -304,57 +297,81 @@ class VideoPlayerWidget(QWidget):
         QShortcut(QKeySequence("."), self, self._increase_speed)
 
     def _apply_style(self):
-        """Apply styles to the widget."""
+        """Apply styles to the widget.
+
+        The player deliberately stays dark in both app themes (standard
+        for media surfaces); its own stylesheet overrides the global one.
+        """
         self.setStyleSheet("""
+            QWidget#playerRoot { background-color: #0b0d10; }
+            QLabel { color: #cfd6e1; background: transparent; }
+            QLabel#playerTitle {
+                background-color: #11141a;
+                color: #eef2f7;
+                padding: 10px 14px;
+                font-weight: 600;
+                font-size: 14px;
+            }
+            QFrame#playerBar {
+                background-color: #11141a;
+                border-top: 1px solid #222835;
+            }
             QSlider::groove:horizontal {
-                background: #3d3d3d;
-                height: 6px;
-                border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #3498db;
-                width: 14px;
-                height: 14px;
-                margin: -4px 0;
-                border-radius: 7px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #5dade2;
+                background: #262d38;
+                height: 5px;
+                border-radius: 2px;
             }
             QSlider::sub-page:horizontal {
-                background: #3498db;
-                border-radius: 3px;
+                background: #4f8cff;
+                border-radius: 2px;
             }
+            QSlider::handle:horizontal {
+                background: #eef2f7;
+                width: 14px;
+                height: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover { background: #74a5ff; }
             QPushButton {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
+                background-color: #1a1f28;
+                border: 1px solid #2a313d;
                 padding: 6px 12px;
-                border-radius: 4px;
-                color: #e0e0e0;
+                border-radius: 8px;
+                color: #e6ebf2;
             }
             QPushButton:hover {
-                background-color: #4d4d4d;
+                background-color: #232a35;
+                border-color: #39424f;
             }
-            QPushButton:pressed {
-                background-color: #2d2d2d;
-            }
+            QPushButton:pressed { background-color: #141920; }
             QPushButton:checked {
-                background-color: #e74c3c;
+                background-color: #4f8cff;
+                border-color: #4f8cff;
+                color: #ffffff;
             }
+            QPushButton#playBtn {
+                background-color: #4f8cff;
+                border-color: #4f8cff;
+                color: #ffffff;
+                font-weight: 600;
+            }
+            QPushButton#playBtn:hover { background-color: #74a5ff; }
             QComboBox {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                padding: 4px 8px;
-                border-radius: 4px;
-                color: #e0e0e0;
+                background-color: #1a1f28;
+                border: 1px solid #2a313d;
+                padding: 5px 10px;
+                border-radius: 8px;
+                color: #e6ebf2;
             }
-            QComboBox::drop-down {
-                border: none;
-            }
+            QComboBox::drop-down { border: none; width: 20px; }
             QComboBox QAbstractItemView {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                selection-background-color: #3498db;
+                background-color: #1a1f28;
+                border: 1px solid #2a313d;
+                border-radius: 8px;
+                selection-background-color: #4f8cff;
+                selection-color: #ffffff;
+                outline: none;
             }
         """)
 
@@ -586,9 +603,9 @@ class VideoPlayerWidget(QWidget):
     def _on_state_changed(self, state):
         """Handle playback state change."""
         if state == QMediaPlayer.PlaybackState.PlayingState:
-            self.play_btn.setText("Pause")
+            self.play_btn.setText("⏸  Pause")
         else:
-            self.play_btn.setText("Play")
+            self.play_btn.setText("▶  Play")
 
         if state == QMediaPlayer.PlaybackState.StoppedState:
             if self.player.position() >= self.player.duration() - 100:

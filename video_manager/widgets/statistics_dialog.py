@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from .. import theme
 from ..database import Database, Statistics
 from ..video_utils import format_duration, format_file_size
 
@@ -15,12 +16,13 @@ class StatCard(QFrame):
 
     def __init__(self, title: str, value: str, subtitle: str = "", parent=None):
         super().__init__(parent)
-        self.setStyleSheet("""
-            StatCard {
-                background-color: #2d2d2d;
-                border: 1px solid #3d3d3d;
-                border-radius: 8px;
-            }
+        t = theme.current()
+        self.setStyleSheet(f"""
+            StatCard {{
+                background-color: {t.surface};
+                border: 1px solid {t.border};
+                border-radius: 12px;
+            }}
         """)
         self.setMinimumSize(140, 90)
         self.setSizePolicy(
@@ -32,16 +34,16 @@ class StatCard(QFrame):
         layout.setSpacing(4)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("color: #888; font-size: 11px;")
+        title_label.setStyleSheet(f"color: {t.text_muted}; font-size: 11px; background: transparent;")
         layout.addWidget(title_label)
 
         value_label = QLabel(value)
-        value_label.setStyleSheet("color: #e0e0e0; font-size: 24px; font-weight: bold;")
+        value_label.setStyleSheet(f"color: {t.accent}; font-size: 24px; font-weight: 600; background: transparent;")
         layout.addWidget(value_label)
 
         if subtitle:
             sub_label = QLabel(subtitle)
-            sub_label.setStyleSheet("color: #666; font-size: 10px;")
+            sub_label.setStyleSheet(f"color: {t.text_faint}; font-size: 10px; background: transparent;")
             layout.addWidget(sub_label)
 
         layout.addStretch()
@@ -52,14 +54,15 @@ class HistoryItemWidget(QFrame):
 
     def __init__(self, video_name: str, played_at: str, parent=None):
         super().__init__(parent)
-        self.setStyleSheet("""
-            HistoryItemWidget {
-                background-color: #2d2d2d;
-                border-radius: 4px;
-            }
-            HistoryItemWidget:hover {
-                background-color: #3d3d3d;
-            }
+        t = theme.current()
+        self.setStyleSheet(f"""
+            HistoryItemWidget {{
+                background-color: {t.surface2};
+                border-radius: 8px;
+            }}
+            HistoryItemWidget:hover {{
+                background-color: {t.surface3};
+            }}
         """)
         self.setMinimumHeight(40)
 
@@ -67,7 +70,7 @@ class HistoryItemWidget(QFrame):
         layout.setContentsMargins(12, 4, 12, 4)
 
         name_label = QLabel(video_name)
-        name_label.setStyleSheet("color: #e0e0e0; font-size: 12px;")
+        name_label.setStyleSheet(f"color: {t.text}; font-size: 12px; background: transparent;")
         name_label.setToolTip(video_name)
         layout.addWidget(name_label, 1)
 
@@ -80,7 +83,7 @@ class HistoryItemWidget(QFrame):
             time_str = played_at[:16] if len(played_at) > 16 else played_at
 
         time_label = QLabel(time_str)
-        time_label.setStyleSheet("color: #666; font-size: 10px;")
+        time_label.setStyleSheet(f"color: {t.text_faint}; font-size: 10px; background: transparent;")
         layout.addWidget(time_label)
 
 
@@ -104,7 +107,7 @@ class StatisticsDialog(QDialog):
 
         # Title
         title = QLabel("Library Statistics")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #e0e0e0;")
+        title.setStyleSheet("font-size: 18px; font-weight: 600;")
         layout.addWidget(title)
 
         # Stats cards
@@ -138,28 +141,21 @@ class StatisticsDialog(QDialog):
 
         # Recent activity section
         recent_label = QLabel("Recent Activity (Last 7 Days)")
-        recent_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #e0e0e0; margin-top: 8px;")
+        recent_label.setStyleSheet("font-size: 14px; font-weight: 600; margin-top: 8px;")
         layout.addWidget(recent_label)
 
         self.recently_played_label = QLabel("0 videos played")
-        self.recently_played_label.setStyleSheet("color: #888; font-size: 12px;")
+        self.recently_played_label.setObjectName("mutedLabel")
         layout.addWidget(self.recently_played_label)
 
         # Play history section
         history_label = QLabel("Recent Play History")
-        history_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #e0e0e0; margin-top: 8px;")
+        history_label.setStyleSheet("font-size: 14px; font-weight: 600; margin-top: 8px;")
         layout.addWidget(history_label)
 
         # History list in scroll area
         history_scroll = QScrollArea()
         history_scroll.setWidgetResizable(True)
-        history_scroll.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid #3d3d3d;
-                border-radius: 4px;
-                background-color: #1e1e1e;
-            }
-        """)
         history_scroll.setMinimumHeight(150)
 
         self.history_container = QWidget()
@@ -214,7 +210,8 @@ class StatisticsDialog(QDialog):
 
         if not history:
             no_history = QLabel("No play history yet")
-            no_history.setStyleSheet("color: #666; padding: 20px;")
+            no_history.setStyleSheet("padding: 20px;")
+            no_history.setObjectName("mutedLabel")
             no_history.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.history_layout.addWidget(no_history)
         else:
@@ -236,22 +233,5 @@ class StatisticsDialog(QDialog):
             self._load_history()
 
     def _apply_style(self):
-        """Apply dialog styles."""
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1e1e1e;
-            }
-            QPushButton {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                padding: 8px 16px;
-                border-radius: 4px;
-                color: #e0e0e0;
-            }
-            QPushButton:hover {
-                background-color: #4d4d4d;
-            }
-            QLabel {
-                color: #e0e0e0;
-            }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass

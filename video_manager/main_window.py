@@ -7,14 +7,18 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QPushButton, QLabel, QFileDialog, QMenu, QToolBar, QStatusBar,
+    QPushButton, QLabel, QFileDialog, QMenu, QStatusBar,
     QListWidget, QListWidgetItem, QStackedWidget, QFrame, QMenuBar,
     QMessageBox, QProgressDialog, QApplication, QLineEdit, QSlider,
     QComboBox, QCheckBox, QDialog, QDialogButtonBox, QProgressBar
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QMimeData, QByteArray
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QByteArray
+from PyQt6.QtGui import (
+    QAction, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent,
+    QColor, QBrush, QFont
+)
 
+from . import theme
 from .database import Database, Video
 from .video_utils import (
     scan_folder_for_videos, generate_thumbnail,
@@ -143,124 +147,29 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._setup_menubar()
-        self._setup_toolbar()
         self._setup_statusbar()
         self._setup_shortcuts()
         self._load_folders()
         self._load_settings()
         self._restore_window_state()
 
-    def _apply_dark_theme(self):
-        """Apply dark theme to the application."""
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #1e1e1e;
-                color: #e0e0e0;
-            }
-            QToolBar {
-                background-color: #2d2d2d;
-                border: none;
-                spacing: 8px;
-                padding: 4px;
-            }
-            QPushButton {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                padding: 6px 12px;
-                border-radius: 4px;
-                color: #e0e0e0;
-            }
-            QPushButton:hover {
-                background-color: #4d4d4d;
-            }
-            QPushButton:pressed {
-                background-color: #2d2d2d;
-            }
-            QPushButton:checked {
-                background-color: #3498db;
-                border: 1px solid #2980b9;
-            }
-            QListWidget {
-                background-color: #252525;
-                border: 1px solid #3d3d3d;
-                border-radius: 4px;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-bottom: 1px solid #3d3d3d;
-            }
-            QListWidget::item:selected {
-                background-color: #3498db;
-            }
-            QListWidget::item:hover {
-                background-color: #3d3d3d;
-            }
-            QSplitter::handle {
-                background-color: #3d3d3d;
-            }
-            QStatusBar {
-                background-color: #2d2d2d;
-                border-top: 1px solid #3d3d3d;
-            }
-            QScrollBar:vertical {
-                background-color: #2d2d2d;
-                width: 12px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #4d4d4d;
-                border-radius: 6px;
-                min-height: 30px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #5d5d5d;
-            }
-            QLineEdit {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                padding: 6px;
-                border-radius: 4px;
-                color: #e0e0e0;
-            }
-            QLineEdit:focus {
-                border: 1px solid #3498db;
-            }
-            QComboBox {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                padding: 5px 10px;
-                border-radius: 4px;
-                color: #e0e0e0;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                selection-background-color: #3498db;
-            }
-            QLabel {
-                color: #e0e0e0;
-            }
-            QMenu {
-                background-color: #2d2d2d;
-                border: 1px solid #3d3d3d;
-            }
-            QMenu::item {
-                padding: 6px 20px;
-            }
-            QMenu::item:selected {
-                background-color: #3498db;
-            }
-            QCheckBox {
-                color: #e0e0e0;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-        """)
+    def _apply_theme(self, name: str):
+        """Apply a theme application-wide and repaint themed views."""
+        t = theme.by_name(name)
+        theme.set_current(t)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(theme.build_stylesheet(t))
+        # repaint virtual-scroll views so delegates pick up new tokens
+        for view in (getattr(self, "grid_view", None),
+                     getattr(self, "list_view", None)):
+            if view:
+                view.viewport().update()
+        if self.selected_video_id:
+            video = self.db.get_video(self.selected_video_id)
+            self._update_favorite_button(bool(video and video.favorite))
+        else:
+            self._update_favorite_button(False)
 
     def _setup_ui(self):
         """Setup the main UI layout."""
@@ -274,15 +183,23 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         left_panel = QWidget()
+        left_panel.setObjectName("sidePanel")
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(8, 8, 8, 8)
+        left_layout.setContentsMargins(10, 12, 10, 10)
 
         folder_header = QHBoxLayout()
-        folder_header.addWidget(QLabel("Folders"))
+        library_label = QLabel("Library")
+        library_font = library_label.font()
+        library_font.setPointSize(library_font.pointSize() + 2)
+        library_font.setBold(True)
+        library_label.setFont(library_font)
+        folder_header.addWidget(library_label)
         folder_header.addStretch()
 
-        add_folder_btn = QPushButton("+")
-        add_folder_btn.setFixedSize(28, 28)
+        add_folder_btn = QPushButton("＋")
+        add_folder_btn.setObjectName("accentBtn")
+        add_folder_btn.setStyleSheet("padding: 0px; font-size: 16px;")
+        add_folder_btn.setFixedSize(30, 30)
         add_folder_btn.clicked.connect(self._add_folder)
         add_folder_btn.setToolTip("Add folder")
         folder_header.addWidget(add_folder_btn)
@@ -290,6 +207,7 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(folder_header)
 
         self.folder_list = QListWidget()
+        self.folder_list.setObjectName("sidebar")
         self.folder_list.itemClicked.connect(self._on_folder_selected)
         self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_list.customContextMenuRequested.connect(self._folder_context_menu)
@@ -311,39 +229,84 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(0)
 
         search_bar = QWidget()
-        search_bar.setStyleSheet("background-color: #252525; padding: 4px;")
+        search_bar.setObjectName("headerBar")
         search_layout = QHBoxLayout(search_bar)
-        search_layout.setContentsMargins(8, 8, 8, 8)
-        search_layout.setSpacing(12)
+        search_layout.setContentsMargins(12, 10, 12, 10)
+        search_layout.setSpacing(10)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search videos... (Ctrl+F)")
-        self.search_input.setMaximumWidth(300)
+        self.search_input.setObjectName("searchInput")
+        self.search_input.setPlaceholderText("🔎  Search videos…   (Ctrl+F)")
+        self.search_input.setMaximumWidth(380)
+        self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_search_changed)
-        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_input, 1)
 
-        search_layout.addWidget(QLabel("Sort:"))
+        sort_label = QLabel("Sort")
+        sort_label.setObjectName("mutedLabel")
+        search_layout.addWidget(sort_label)
 
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Name", "Duration", "Date Added", "Favorites"])
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         search_layout.addWidget(self.sort_combo)
 
-        self.sort_order_btn = QPushButton("Asc")
-        self.sort_order_btn.setFixedWidth(50)
+        self.sort_order_btn = QPushButton("↑")
+        self.sort_order_btn.setObjectName("iconBtn")
+        self.sort_order_btn.setFixedSize(34, 32)
         self.sort_order_btn.setCheckable(True)
+        self.sort_order_btn.setToolTip("Toggle sort order")
         self.sort_order_btn.clicked.connect(self._toggle_sort_order)
         search_layout.addWidget(self.sort_order_btn)
 
-        search_layout.addSpacing(20)
-
-        self.favorites_btn = QPushButton("Favorites")
+        self.favorites_btn = QPushButton("★ Favorites")
         self.favorites_btn.setCheckable(True)
         self.favorites_btn.setToolTip("Show only favorites")
         self.favorites_btn.clicked.connect(self._toggle_favorites_filter)
         search_layout.addWidget(self.favorites_btn)
 
         search_layout.addStretch()
+
+        # Segmented grid/list view toggle
+        self.grid_btn = QPushButton("⊞")
+        self.grid_btn.setObjectName("segLeft")
+        self.grid_btn.setFixedSize(38, 32)
+        self.grid_btn.setCheckable(True)
+        self.grid_btn.setChecked(True)
+        self.grid_btn.setToolTip("Grid view (Ctrl+1)")
+        self.grid_btn.clicked.connect(lambda: self._set_view_mode("grid"))
+        search_layout.addWidget(self.grid_btn)
+
+        self.list_btn = QPushButton("☰")
+        self.list_btn.setObjectName("segRight")
+        self.list_btn.setFixedSize(38, 32)
+        self.list_btn.setCheckable(True)
+        self.list_btn.setToolTip("List view (Ctrl+2)")
+        self.list_btn.clicked.connect(lambda: self._set_view_mode("list"))
+        search_layout.addWidget(self.list_btn)
+
+        search_layout.addSpacing(6)
+
+        refresh_btn = QPushButton("⟳")
+        refresh_btn.setObjectName("iconBtn")
+        refresh_btn.setFixedSize(34, 32)
+        refresh_btn.setToolTip("Rescan current folder")
+        refresh_btn.clicked.connect(self._refresh_current_folder)
+        search_layout.addWidget(refresh_btn)
+
+        tags_btn = QPushButton("🏷")
+        tags_btn.setObjectName("iconBtn")
+        tags_btn.setFixedSize(34, 32)
+        tags_btn.setToolTip("Manage tags")
+        tags_btn.clicked.connect(self._open_tag_manager)
+        search_layout.addWidget(tags_btn)
+
+        stats_btn = QPushButton("📊")
+        stats_btn.setObjectName("iconBtn")
+        stats_btn.setFixedSize(34, 32)
+        stats_btn.setToolTip("Statistics")
+        stats_btn.clicked.connect(self._open_statistics)
+        search_layout.addWidget(stats_btn)
 
         right_layout.addWidget(search_bar)
 
@@ -372,13 +335,8 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.view_stack)
 
         self.detail_panel = QFrame()
-        self.detail_panel.setFrameShape(QFrame.Shape.StyledPanel)
-        self.detail_panel.setStyleSheet("""
-            QFrame {
-                background-color: #252525;
-                border-top: 1px solid #3d3d3d;
-            }
-        """)
+        self.detail_panel.setObjectName("detailPanel")
+        self.detail_panel.setFrameShape(QFrame.Shape.NoFrame)
         self.detail_panel.setMinimumHeight(130)
         self.detail_panel.setMaximumHeight(170)
 
@@ -395,14 +353,15 @@ class MainWindow(QMainWindow):
         title_row.addWidget(self.favorite_btn)
 
         self.video_title = QLabel("Select a video")
-        self.video_title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.video_title.setStyleSheet("font-size: 14px; font-weight: 600;")
         title_row.addWidget(self.video_title)
         title_row.addStretch()
 
         detail_layout.addLayout(title_row)
 
         self.video_info = QLabel("")
-        self.video_info.setStyleSheet("color: #888; font-size: 12px;")
+        self.video_info.setObjectName("mutedLabel")
+        self.video_info.setStyleSheet("font-size: 12px;")
         detail_layout.addWidget(self.video_info)
 
         # Progress bar for playback position
@@ -410,7 +369,8 @@ class MainWindow(QMainWindow):
         progress_row.setSpacing(8)
 
         self.progress_label = QLabel("Progress:")
-        self.progress_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.progress_label.setObjectName("mutedLabel")
+        self.progress_label.setStyleSheet("font-size: 11px;")
         self.progress_label.setVisible(False)
         progress_row.addWidget(self.progress_label)
 
@@ -418,22 +378,12 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFixedHeight(8)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                background-color: #3d3d3d;
-                border: none;
-                border-radius: 4px;
-            }
-            QProgressBar::chunk {
-                background-color: #3498db;
-                border-radius: 4px;
-            }
-        """)
+        self.progress_bar.setTextVisible(False)
         self.progress_bar.setVisible(False)
         progress_row.addWidget(self.progress_bar)
 
-        self.resume_btn = QPushButton("Resume")
-        self.resume_btn.setFixedWidth(70)
+        self.resume_btn = QPushButton("▶ Resume")
+        self.resume_btn.setObjectName("accentBtn")
         self.resume_btn.setVisible(False)
         self.resume_btn.clicked.connect(self._resume_playback)
         progress_row.addWidget(self.resume_btn)
@@ -539,42 +489,6 @@ class MainWindow(QMainWindow):
         auto_tag_action.triggered.connect(self._auto_tag_selected)
         tools_menu.addAction(auto_tag_action)
 
-    def _setup_toolbar(self):
-        """Setup the toolbar."""
-        toolbar = QToolBar()
-        toolbar.setMovable(False)
-        toolbar.setIconSize(QSize(20, 20))
-        self.addToolBar(toolbar)
-
-        self.grid_action = QAction("Grid View", self)
-        self.grid_action.setCheckable(True)
-        self.grid_action.setChecked(True)
-        self.grid_action.triggered.connect(lambda: self._set_view_mode("grid"))
-        toolbar.addAction(self.grid_action)
-
-        self.list_action = QAction("List View", self)
-        self.list_action.setCheckable(True)
-        self.list_action.triggered.connect(lambda: self._set_view_mode("list"))
-        toolbar.addAction(self.list_action)
-
-        toolbar.addSeparator()
-
-        refresh_action = QAction("Refresh", self)
-        refresh_action.triggered.connect(self._refresh_current_folder)
-        toolbar.addAction(refresh_action)
-
-        toolbar.addSeparator()
-
-        tag_manager_action = QAction("Manage Tags", self)
-        tag_manager_action.triggered.connect(self._open_tag_manager)
-        toolbar.addAction(tag_manager_action)
-
-        toolbar.addSeparator()
-
-        stats_action = QAction("Statistics", self)
-        stats_action.triggered.connect(self._open_statistics)
-        toolbar.addAction(stats_action)
-
     def _setup_statusbar(self):
         """Setup the status bar."""
         self.statusbar = QStatusBar()
@@ -616,31 +530,30 @@ class MainWindow(QMainWindow):
 
     def _update_favorite_button(self, is_favorite: bool):
         """Update favorite button appearance."""
+        t = theme.current()
         if is_favorite:
             self.favorite_btn.setText("★")
-            self.favorite_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #f39c12;
+            self.favorite_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {t.warning};
                     border: none;
                     font-size: 16px;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #e67e22;
-                }
+                    border-radius: 8px;
+                    color: #1c1c1c;
+                }}
+                QPushButton:hover {{ background-color: {t.accent_hover}; }}
             """)
         else:
             self.favorite_btn.setText("☆")
-            self.favorite_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3d3d3d;
-                    border: 1px solid #4d4d4d;
+            self.favorite_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {t.surface2};
+                    border: 1px solid {t.border};
                     font-size: 16px;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #4d4d4d;
-                }
+                    border-radius: 8px;
+                    color: {t.text_muted};
+                }}
+                QPushButton:hover {{ background-color: {t.surface3}; }}
             """)
 
     def _toggle_current_favorite(self):
@@ -670,29 +583,40 @@ class MainWindow(QMainWindow):
         """Toggle sort order between asc and desc."""
         if self.sort_order_btn.isChecked():
             self.current_sort_order = "desc"
-            self.sort_order_btn.setText("Desc")
+            self.sort_order_btn.setText("↓")
         else:
             self.current_sort_order = "asc"
-            self.sort_order_btn.setText("Asc")
+            self.sort_order_btn.setText("↑")
         self._refresh_videos()
 
     def _set_view_mode(self, mode: str):
         """Switch between grid and list view."""
         if mode == "grid":
             self.view_stack.setCurrentWidget(self.grid_view)
-            self.grid_action.setChecked(True)
-            self.list_action.setChecked(False)
         else:
             self.view_stack.setCurrentWidget(self.list_view)
-            self.grid_action.setChecked(False)
-            self.list_action.setChecked(True)
+        self.grid_btn.setChecked(mode == "grid")
+        self.list_btn.setChecked(mode == "list")
+
+    def _add_sidebar_section(self, title: str):
+        """Add a non-selectable section header to the sidebar."""
+        item = QListWidgetItem(title.upper())
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        font = QFont()
+        font.setPointSize(max(7, font.pointSize() - 2))
+        font.setBold(True)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
+        item.setFont(font)
+        # neutral gray readable on both themes
+        item.setForeground(QBrush(QColor("#7a8494")))
+        self.folder_list.addItem(item)
 
     def _load_folders(self):
         """Load folders from database."""
         self.folder_list.clear()
         folders = self.db.get_folders()
 
-        all_item = QListWidgetItem("All Videos")
+        all_item = QListWidgetItem("🎬 All Videos")
         all_item.setData(Qt.ItemDataRole.UserRole, None)
         self.folder_list.addItem(all_item)
 
@@ -700,46 +624,38 @@ class MainWindow(QMainWindow):
         fav_item.setData(Qt.ItemDataRole.UserRole, "favorites")
         self.folder_list.addItem(fav_item)
 
-        history_item = QListWidgetItem("⏱ Recently Played")
+        history_item = QListWidgetItem("🕑 Recently Played")
         history_item.setData(Qt.ItemDataRole.UserRole, "history")
         self.folder_list.addItem(history_item)
 
-        recent_item = QListWidgetItem("🆕 Recently Added")
+        recent_item = QListWidgetItem("✨ Recently Added")
         recent_item.setData(Qt.ItemDataRole.UserRole, "recent")
         self.folder_list.addItem(recent_item)
 
         # Smart Collections
         smart_colls = self.db.get_smart_collections()
         if smart_colls:
-            separator = QListWidgetItem("─── Smart ───")
-            separator.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.folder_list.addItem(separator)
-
+            self._add_sidebar_section("Smart Collections")
             for coll in smart_colls:
-                item = QListWidgetItem(f"🔍 {coll.name}")
+                item = QListWidgetItem(f"◈ {coll.name}")
                 item.setData(Qt.ItemDataRole.UserRole, ("smart", coll))
                 self.folder_list.addItem(item)
 
         # Playlists
         playlists = self.db.get_playlists()
         if playlists:
-            separator = QListWidgetItem("─── Playlists ───")
-            separator.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.folder_list.addItem(separator)
-
+            self._add_sidebar_section("Playlists")
             for pl in playlists:
-                item = QListWidgetItem(f"📋 {pl.name}")
+                item = QListWidgetItem(f"▶ {pl.name}")
                 item.setData(Qt.ItemDataRole.UserRole, ("playlist", pl.id))
                 self.folder_list.addItem(item)
 
         # Folders
         if folders:
-            separator = QListWidgetItem("─── Folders ───")
-            separator.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.folder_list.addItem(separator)
+            self._add_sidebar_section("Folders")
 
         for folder in folders:
-            item = QListWidgetItem(folder.name)
+            item = QListWidgetItem(f"📁 {folder.name}")
             item.setData(Qt.ItemDataRole.UserRole, folder.id)
             item.setToolTip(folder.path)
             self.folder_list.addItem(item)
@@ -1184,86 +1100,7 @@ class MainWindow(QMainWindow):
     def _load_settings(self):
         """Load application settings."""
         settings = self.db.get_app_settings()
-        if settings.theme == "light":
-            self._apply_light_theme()
-        else:
-            self._apply_dark_theme()
-
-    def _apply_light_theme(self):
-        """Apply light theme to the application."""
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #f5f5f5;
-                color: #333333;
-            }
-            QToolBar {
-                background-color: #e0e0e0;
-                border: none;
-                spacing: 8px;
-                padding: 4px;
-            }
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-                padding: 6px 12px;
-                border-radius: 4px;
-                color: #333333;
-            }
-            QPushButton:hover {
-                background-color: #e8e8e8;
-            }
-            QPushButton:pressed {
-                background-color: #d0d0d0;
-            }
-            QPushButton:checked {
-                background-color: #3498db;
-                color: white;
-            }
-            QListWidget {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-                border-radius: 4px;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-bottom: 1px solid #eeeeee;
-            }
-            QListWidget::item:selected {
-                background-color: #3498db;
-                color: white;
-            }
-            QListWidget::item:hover {
-                background-color: #f0f0f0;
-            }
-            QLineEdit {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-                padding: 6px;
-                border-radius: 4px;
-                color: #333333;
-            }
-            QComboBox {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-                padding: 5px 10px;
-                border-radius: 4px;
-                color: #333333;
-            }
-            QLabel {
-                color: #333333;
-            }
-            QMenu {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-            }
-            QMenu::item:selected {
-                background-color: #3498db;
-                color: white;
-            }
-            QStatusBar {
-                background-color: #e0e0e0;
-            }
-        """)
+        self._apply_theme(settings.theme)
 
     def _restore_window_state(self):
         """Restore window geometry from settings."""

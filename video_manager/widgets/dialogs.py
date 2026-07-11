@@ -129,37 +129,8 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "Done", "Play history cleared.")
 
     def _apply_style(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QGroupBox {
-                color: #e0e0e0;
-                border: 1px solid #3d3d3d;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding: 12px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-            QLabel { color: #e0e0e0; }
-            QPushButton {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                padding: 8px 16px;
-                border-radius: 4px;
-                color: #e0e0e0;
-            }
-            QPushButton:hover { background-color: #4d4d4d; }
-            QComboBox {
-                background-color: #3d3d3d;
-                border: 1px solid #4d4d4d;
-                padding: 5px 10px;
-                border-radius: 4px;
-                color: #e0e0e0;
-            }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass
 
 
 class AdvancedSearchDialog(QDialog):
@@ -273,22 +244,8 @@ class AdvancedSearchDialog(QDialog):
         self.accept()
 
     def _apply_style(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QGroupBox { color: #e0e0e0; border: 1px solid #3d3d3d; border-radius: 4px; margin-top: 12px; padding: 12px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QLabel { color: #e0e0e0; }
-            QLineEdit, QSpinBox, QComboBox {
-                background-color: #3d3d3d; border: 1px solid #4d4d4d;
-                padding: 5px; border-radius: 4px; color: #e0e0e0;
-            }
-            QPushButton {
-                background-color: #3d3d3d; border: 1px solid #4d4d4d;
-                padding: 8px 16px; border-radius: 4px; color: #e0e0e0;
-            }
-            QPushButton:hover { background-color: #4d4d4d; }
-            QListWidget { background-color: #2d2d2d; border: 1px solid #3d3d3d; color: #e0e0e0; }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass
 
 
 class SmartCollectionDialog(QDialog):
@@ -412,14 +369,8 @@ class SmartCollectionDialog(QDialog):
         self.accept()
 
     def _apply_style(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #e0e0e0; }
-            QLineEdit, QSpinBox, QComboBox {
-                background-color: #3d3d3d; border: 1px solid #4d4d4d;
-                padding: 5px; border-radius: 4px; color: #e0e0e0;
-            }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass
 
 
 class PlaylistDialog(QDialog):
@@ -527,16 +478,8 @@ class PlaylistDialog(QDialog):
             self._on_playlist_selected(playlist_item)
 
     def _apply_style(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #e0e0e0; }
-            QListWidget { background-color: #2d2d2d; border: 1px solid #3d3d3d; color: #e0e0e0; }
-            QPushButton {
-                background-color: #3d3d3d; border: 1px solid #4d4d4d;
-                padding: 8px 16px; border-radius: 4px; color: #e0e0e0;
-            }
-            QPushButton:hover { background-color: #4d4d4d; }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass
 
 
 class DuplicateHashWorker(QThread):
@@ -681,16 +624,8 @@ class DuplicateFinderDialog(QDialog):
             self.results_list.addItem(item)
 
     def _apply_style(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #e0e0e0; }
-            QListWidget { background-color: #2d2d2d; border: 1px solid #3d3d3d; color: #e0e0e0; }
-            QPushButton {
-                background-color: #3d3d3d; border: 1px solid #4d4d4d;
-                padding: 8px 16px; border-radius: 4px; color: #e0e0e0;
-            }
-            QPushButton:hover { background-color: #4d4d4d; }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass
 
 
 class ExportImportDialog(QDialog):
@@ -830,17 +765,8 @@ class ExportImportDialog(QDialog):
             QMessageBox.critical(self, "Error", f"Import failed:\n{str(e)}")
 
     def _apply_style(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QGroupBox { color: #e0e0e0; border: 1px solid #3d3d3d; border-radius: 4px; margin-top: 12px; padding: 12px; }
-            QLabel { color: #e0e0e0; }
-            QCheckBox { color: #e0e0e0; }
-            QPushButton {
-                background-color: #3d3d3d; border: 1px solid #4d4d4d;
-                padding: 8px 16px; border-radius: 4px; color: #e0e0e0;
-            }
-            QPushButton:hover { background-color: #4d4d4d; }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass
 
 
 class MissingFilesDialog(QDialog):
@@ -917,13 +843,5 @@ class MissingFilesDialog(QDialog):
             self._check_files()
 
     def _apply_style(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #e0e0e0; }
-            QListWidget { background-color: #2d2d2d; border: 1px solid #3d3d3d; color: #e0e0e0; }
-            QPushButton {
-                background-color: #3d3d3d; border: 1px solid #4d4d4d;
-                padding: 8px 16px; border-radius: 4px; color: #e0e0e0;
-            }
-            QPushButton:hover { background-color: #4d4d4d; }
-        """)
+        """Styling is inherited from the global app theme."""
+        pass
